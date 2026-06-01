@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, TextInput, Modal, ScrollView, ActivityIndicator, Alert, Image, Switch, Dimensions } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, TextInput, Modal, ScrollView, ActivityIndicator, Alert, Image, Switch, Dimensions, Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import Globe from 'react-globe.gl';
 import { supabase } from './src/lib/supabase';
+import ModelViewer from './ModelViewer';
 
 interface Build {
   id: string;
@@ -45,6 +46,7 @@ export default function App() {
   const [selectedBuild, setSelectedBuild] = useState<Build | null>(null);
   const [mediaForSelected, setMediaForSelected] = useState<Media[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
+  const [viewerVisible, setViewerVisible] = useState(false);
 
   const [prompt, setPrompt] = useState('');
   const [selectedAssetType, setSelectedAssetType] = useState<'house' | 'car' | 'factory' | 'warehouse'>('house');
@@ -286,8 +288,7 @@ export default function App() {
 
   const open3DViewer = () => {
     if (selectedBuild?.model_url) {
-      const viewerUrl = `https://gltf-viewer.donmccurdy.com/?url=${encodeURIComponent(selectedBuild.model_url)}`;
-      window.open(viewerUrl, '_blank');
+      setViewerVisible(true);
     } else {
       Alert.alert('Not Ready', '3D model is not available yet.');
     }
@@ -295,10 +296,14 @@ export default function App() {
 
   const downloadModel = () => {
     if (selectedBuild?.model_url) {
-      const link = document.createElement('a');
-      link.href = selectedBuild.model_url;
-      link.download = `${selectedBuild.name || 'model'}.glb`;
-      link.click();
+      if (Platform.OS === 'web') {
+        const link = document.createElement('a');
+        link.href = selectedBuild.model_url;
+        link.download = `${selectedBuild.name || 'model'}.glb`;
+        link.click();
+      } else {
+        Alert.alert('Download', 'Download feature coming soon for mobile');
+      }
     }
   };
 
@@ -390,7 +395,7 @@ export default function App() {
                       style={{ backgroundColor: '#00D4FF', paddingVertical: 14, borderRadius: 10, alignItems: 'center' }}
                       onPress={open3DViewer}
                     >
-                      <Text style={{ color: '#1F1F1F', fontWeight: 'bold', fontSize: 16 }}>🧊 View 3D Model</Text>
+                      <Text style={{ color: '#1F1F1F', fontWeight: 'bold', fontSize: 16 }}>🧊 Open 3D Viewer</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity 
@@ -437,12 +442,20 @@ export default function App() {
         </View>
       )}
 
+      {/* Asset Creation Modal */}
       <Modal visible={modalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>What are we building today?</Text>
 
-            <TextInput style={styles.input} placeholder="Describe your asset..." value={prompt} onChangeText={setPrompt} multiline placeholderTextColor="#888" />
+            <TextInput 
+              style={styles.input} 
+              placeholder="Describe your asset..." 
+              value={prompt} 
+              onChangeText={setPrompt} 
+              multiline 
+              placeholderTextColor="#888" 
+            />
 
             <TouchableOpacity style={styles.photoButton} onPress={pickMedia}>
               <Text style={styles.photoButtonText}>
@@ -453,10 +466,16 @@ export default function App() {
             <View style={{ marginTop: 16 }}>
               <Text style={styles.typeLabel}>Location</Text>
               <View style={{ flexDirection: 'row', backgroundColor: '#2C2C2C', borderRadius: 999, padding: 4 }}>
-                <TouchableOpacity style={[styles.locationTab, useCurrentLocation && styles.locationTabActive]} onPress={() => setUseCurrentLocation(true)}>
+                <TouchableOpacity 
+                  style={[styles.locationTab, useCurrentLocation && styles.locationTabActive]} 
+                  onPress={() => setUseCurrentLocation(true)}
+                >
                   <Text style={useCurrentLocation ? styles.typeTextActive : styles.typeText}>📍 Current Location</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.locationTab, !useCurrentLocation && styles.locationTabActive]} onPress={() => setUseCurrentLocation(false)}>
+                <TouchableOpacity 
+                  style={[styles.locationTab, !useCurrentLocation && styles.locationTabActive]} 
+                  onPress={() => setUseCurrentLocation(false)}
+                >
                   <Text style={!useCurrentLocation ? styles.typeTextActive : styles.typeText}>Enter Address</Text>
                 </TouchableOpacity>
               </View>
@@ -464,7 +483,12 @@ export default function App() {
               {useCurrentLocation ? (
                 <Text style={{ color: '#00D4FF', marginTop: 8, textAlign: 'center' }}>Will use your current GPS location</Text>
               ) : (
-                <TextInput style={[styles.input, { marginTop: 8 }]} placeholder="Enter address (e.g. 123 Example St, Sydney)" value={manualAddress} onChangeText={setManualAddress} />
+                <TextInput 
+                  style={[styles.input, { marginTop: 8 }]} 
+                  placeholder="Enter address (e.g. 123 Example St, Sydney)" 
+                  value={manualAddress} 
+                  onChangeText={setManualAddress} 
+                />
               )}
             </View>
 
@@ -476,7 +500,11 @@ export default function App() {
             <Text style={styles.typeLabel}>Asset Type</Text>
             <View style={styles.typeRow}>
               {(['house', 'car', 'factory', 'warehouse'] as const).map(type => (
-                <TouchableOpacity key={type} style={[styles.typeChip, selectedAssetType === type && styles.typeChipActive]} onPress={() => setSelectedAssetType(type)}>
+                <TouchableOpacity 
+                  key={type} 
+                  style={[styles.typeChip, selectedAssetType === type && styles.typeChipActive]} 
+                  onPress={() => setSelectedAssetType(type)}
+                >
                   <Text style={[styles.typeText, selectedAssetType === type && styles.typeTextActive]}>{type}</Text>
                 </TouchableOpacity>
               ))}
@@ -492,6 +520,21 @@ export default function App() {
           </View>
         </View>
       </Modal>
+
+      {/* New Immersive 3D Viewer Modal */}
+      <Modal
+        visible={viewerVisible}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setViewerVisible(false)}
+      >
+        {selectedBuild?.model_url && (
+          <ModelViewer 
+            modelUrl={selectedBuild.model_url} 
+            onClose={() => setViewerVisible(false)} 
+          />
+        )}
+      </Modal>
     </View>
   );
 }
@@ -501,10 +544,6 @@ const styles = StyleSheet.create({
   header: { paddingTop: 50, paddingHorizontal: 20, alignItems: 'center' },
   title: { fontSize: 28, color: '#E8B923', fontWeight: 'bold' },
   subtitle: { color: '#00D4FF', fontSize: 14 },
-  statsContainer: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', marginTop: 10, gap: 8 },
-  statItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1F1F1F', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
-  statDot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
-  statText: { color: '#F5F0E6', fontSize: 12 },
   globeContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyState: { alignItems: 'center', padding: 40 },
   emptyTitle: { fontSize: 22, color: '#E8B923', marginBottom: 8 },
