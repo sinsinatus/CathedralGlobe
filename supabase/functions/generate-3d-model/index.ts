@@ -20,12 +20,22 @@ serve(async (req) => {
   }
 
   try {
-    const { build_id, prompt } = await req.json();
+    const { build_id, prompt, asset_type } = await req.json();
 
     if (!MESHY_API_KEY) throw new Error("MESHY_API_KEY is not set");
     if (!build_id || !prompt) throw new Error("build_id and prompt required");
 
-    console.log(`[generate-3d-model] Starting for build ${build_id}`);
+    // Enhanced prompt for better exterior + interior results
+    const enhancedPrompt = `
+      Highly detailed, realistic 3D model of a ${asset_type || 'modern building'}, 
+      ${prompt}. 
+      Full exterior view with large windows that clearly show detailed interior spaces. 
+      Open floor plan, realistic furniture, natural lighting, PBR materials, 
+      architectural visualization quality, game-ready, high poly count, 
+      clean topology, visible rooms through windows, professional 3D asset.
+    `.trim().replace(/\s+/g, ' ');
+
+    console.log(`[generate-3d-model] Enhanced prompt: ${enhancedPrompt}`);
 
     const response = await fetch("https://api.meshy.ai/openapi/v2/text-to-3d", {
       method: "POST",
@@ -34,8 +44,8 @@ serve(async (req) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        mode: "preview",           // ← This is the correct required value
-        prompt: prompt,
+        mode: "preview",
+        prompt: enhancedPrompt,
         art_style: "realistic",
         should_remesh: true,
       }),
@@ -44,14 +54,11 @@ serve(async (req) => {
     const data = await response.json();
 
     if (!response.ok) {
-      console.error("[generate-3d-model] Meshy API Error:", data);
       throw new Error(`Meshy API error ${response.status}: ${JSON.stringify(data)}`);
     }
 
     const taskId = data?.result;
     if (!taskId) throw new Error("Meshy did not return a task ID");
-
-    console.log(`[generate-3d-model] Task created successfully: ${taskId}`);
 
     await supabase.from("builds").update({
       model_status: "processing",
