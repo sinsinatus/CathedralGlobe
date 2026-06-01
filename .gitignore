@@ -1,41 +1,65 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
-
-# dependencies
+# Dependencies
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
-# Expo
-.expo/
+# Production builds / bundles
 dist/
-web-build/
+build/
+.out/
+release/
+
+# Environment variables (important!)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Supabase local development
+supabase/.temp/
+supabase/.migrations/
+supabase/migrations/
+
+# Expo / React Native
+.expo/
 expo-env.d.ts
-
-# Native
-.kotlin/
-*.orig.*
+android/
+ios/
+.tmp/
 *.jks
-*.p8
-*.p12
-*.key
-*.mobileprovision
+*.keystore
 
-# Metro
-.metro-health-check*
-
-# debug
-npm-debug.*
-yarn-debug.*
-yarn-error.*
-
-# macOS
-.DS_Store
-*.pem
-
-# local env files
-.env*.local
-
-# typescript
+# TypeScript cache
 *.tsbuildinfo
 
-# generated native folders
-/ios
-/android
+# Logs and temporary files
+logs/
+*.log
+temp/
+.tmp/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Claude / AI tool files (optional but recommended)
+.claude/
+
+# Miscellaneous
+*.pem
+coverage/
+.nyc_output/
