@@ -237,71 +237,44 @@ export default function App() {
     Alert.alert('✅ Asset Created!', `Build ID: ${build.id}`);
   };
 
-  // ==================== FIXED DELETE FUNCTION ====================
-   const deleteBuild = async (build: Build) => {
-    console.log("🗑️ Delete button pressed for build:", build.id, build.name);
+  const deleteBuild = async (build: Build) => {
+    Alert.alert(
+      'Confirm Delete',
+      `Delete "${build.name}" and all its data?\n\nThis cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              console.log("🚀 Starting delete for build:", build.id);
 
-    const confirmed = Platform.OS === 'web' 
-      ? window.confirm(`Delete "${build.name}" and all its data?\n\nThis cannot be undone.`)
-      : false;   // We'll handle native Alert below if needed
+              await supabase.from('media').delete().eq('build_id', build.id);
 
-    if (!confirmed && Platform.OS !== 'web') {
-      // For native we can keep Alert, but for now let's use confirm for consistency
-      Alert.alert(
-        "Confirm Delete",
-        `Delete "${build.name}" and all its data?`,
-        [
-          { text: "Cancel", style: "cancel" },
-          { 
-            text: "Delete", 
-            style: "destructive",
-            onPress: () => performDelete(build)
+              if (build.model_url) {
+                const filename = `${build.id}.glb`;
+                await supabase.storage.from('models').remove([filename]);
+              }
+
+              const { error } = await supabase.from('builds').delete().eq('id', build.id);
+
+              if (error) throw error;
+
+              setSelectedBuild(null);
+              setMediaForSelected([]);
+              await loadBuilds();
+
+              Alert.alert('✅ Asset Deleted Successfully');
+            } catch (e: any) {
+              console.error("❌ Delete failed:", e);
+              Alert.alert('Delete Failed', e.message || 'Unknown error');
+            }
           }
-        ]
-      );
-      return;
-    }
-
-    if (confirmed || Platform.OS !== 'web') {
-      await performDelete(build);
-    }
+        }
+      ]
+    );
   };
-
-  // Separate function that does the actual deletion
-  const performDelete = async (build: Build) => {
-    try {
-      console.log("🚀 Starting delete for build:", build.id);
-
-      // Delete media records
-      await supabase.from('media').delete().eq('build_id', build.id);
-      console.log("✅ Media records deleted");
-
-      // Delete model file
-      if (build.model_url) {
-        const filename = `${build.id}.glb`;
-        await supabase.storage.from('models').remove([filename]);
-        console.log("✅ Model file deleted");
-      }
-
-      // Delete the build
-      const { error } = await supabase.from('builds').delete().eq('id', build.id);
-
-      if (error) throw error;
-
-      console.log("✅ Build deleted successfully");
-
-      setSelectedBuild(null);
-      setMediaForSelected([]);
-      await loadBuilds();
-
-      Alert.alert("✅ Success", "Asset has been deleted.");
-
-    } catch (e: any) {
-      console.error("❌ Delete failed:", e);
-      Alert.alert("Delete Failed", e.message || "Unknown error");
-    }
-  };
-  // ============================================================
 
   const pickMedia = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -476,16 +449,10 @@ export default function App() {
               </View>
             )}
 
-            <TouchableOpacity 
-              style={[styles.actionBtn, { backgroundColor: '#FF3B30', marginTop: 20 }]} 
-              onPress={() => deleteBuild(selectedBuild)}
-            >
+            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#FF3B30', marginTop: 20 }]} onPress={() => deleteBuild(selectedBuild)}>
               <Text style={styles.actionBtnText}>🗑️ Delete Asset</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity style={styles.closeBtn} onPress={closePanel}>
-              <Text style={styles.closeText}>Close</Text>
-            </TouchableOpacity>
+            <TouchableOpacity style={styles.closeBtn} onPress={closePanel}><Text style={styles.closeText}>Close</Text></TouchableOpacity>
           </ScrollView>
         </View>
       )}
@@ -514,16 +481,10 @@ export default function App() {
             <View style={{ marginTop: 16 }}>
               <Text style={styles.typeLabel}>Location</Text>
               <View style={{ flexDirection: 'row', backgroundColor: '#2C2C2C', borderRadius: 999, padding: 4 }}>
-                <TouchableOpacity 
-                  style={[styles.locationTab, useCurrentLocation && styles.locationTabActive]} 
-                  onPress={() => setUseCurrentLocation(true)}
-                >
+                <TouchableOpacity style={[styles.locationTab, useCurrentLocation && styles.locationTabActive]} onPress={() => setUseCurrentLocation(true)}>
                   <Text style={useCurrentLocation ? styles.typeTextActive : styles.typeText}>📍 Current Location</Text>
                 </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.locationTab, !useCurrentLocation && styles.locationTabActive]} 
-                  onPress={() => setUseCurrentLocation(false)}
-                >
+                <TouchableOpacity style={[styles.locationTab, !useCurrentLocation && styles.locationTabActive]} onPress={() => setUseCurrentLocation(false)}>
                   <Text style={!useCurrentLocation ? styles.typeTextActive : styles.typeText}>Enter Address</Text>
                 </TouchableOpacity>
               </View>
@@ -569,16 +530,17 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* 3D Viewer Modal */}
+      {/* 3D Viewer Modal - NOW PASSES buildId */}
       <Modal
         visible={viewerVisible}
         animationType="slide"
         presentationStyle="fullScreen"
         onRequestClose={() => setViewerVisible(false)}
       >
-        {selectedBuild?.model_url && (
+        {selectedBuild?.model_url && selectedBuild?.id && (
           <ModelViewer 
             modelUrl={selectedBuild.model_url} 
+            buildId={selectedBuild.id} 
             onClose={() => setViewerVisible(false)} 
           />
         )}
