@@ -25,17 +25,35 @@ serve(async (req) => {
     if (!MESHY_API_KEY) throw new Error("MESHY_API_KEY is not set");
     if (!build_id || !prompt) throw new Error("build_id and prompt required");
 
-    // Enhanced prompt for better exterior + interior results
-    const enhancedPrompt = `
-      Highly detailed, realistic 3D model of a ${asset_type || 'modern building'}, 
-      ${prompt}. 
-      Full exterior view with large windows that clearly show detailed interior spaces. 
-      Open floor plan, realistic furniture, natural lighting, PBR materials, 
-      architectural visualization quality, game-ready, high poly count, 
-      clean topology, visible rooms through windows, professional 3D asset.
-    `.trim().replace(/\s+/g, ' ');
+    // Advanced asset-type aware prompt engineering
+    let basePrompt = prompt.trim();
 
-    console.log(`[generate-3d-model] Enhanced prompt: ${enhancedPrompt}`);
+    const qualityBoosters = `
+      highly detailed, ultra realistic, architectural visualization, 
+      PBR materials, clean topology, game-ready, professional 3D asset, 
+      natural lighting, realistic scale, sharp details, 8k quality
+    `.trim();
+
+    let enhancedPrompt = "";
+
+    switch (asset_type) {
+      case 'house':
+        enhancedPrompt = `Modern residential ${basePrompt}, large windows clearly showing detailed interior spaces, open floor plan, visible rooms, furniture, realistic interior lighting, full exterior and interior visible, photorealistic digital twin`;
+        break;
+      case 'car':
+        enhancedPrompt = `Realistic ${basePrompt}, highly detailed vehicle, accurate proportions, realistic materials (glass, metal, rubber, paint), interior visible through windows, studio lighting, automotive photography style`;
+        break;
+      case 'factory':
+      case 'warehouse':
+        enhancedPrompt = `Industrial ${basePrompt}, large factory/warehouse building, detailed exterior with loading docks and windows, visible interior machinery and structure, industrial realism, cinematic lighting`;
+        break;
+      default:
+        enhancedPrompt = basePrompt;
+    }
+
+    const finalPrompt = `${enhancedPrompt}, ${qualityBoosters}`.replace(/\s+/g, ' ');
+
+    console.log(`[generate-3d-model] Final prompt for ${asset_type}: ${finalPrompt}`);
 
     const response = await fetch("https://api.meshy.ai/openapi/v2/text-to-3d", {
       method: "POST",
@@ -45,7 +63,7 @@ serve(async (req) => {
       },
       body: JSON.stringify({
         mode: "preview",
-        prompt: enhancedPrompt,
+        prompt: finalPrompt,
         art_style: "realistic",
         should_remesh: true,
       }),

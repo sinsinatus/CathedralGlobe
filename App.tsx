@@ -237,23 +237,71 @@ export default function App() {
     Alert.alert('✅ Asset Created!', `Build ID: ${build.id}`);
   };
 
-  const deleteBuild = async (build: Build) => {
-    Alert.alert('Confirm Delete', `Delete "${build.name}" and all data?`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-        try {
-          await supabase.from('media').delete().eq('build_id', build.id);
-          const { error } = await supabase.from('builds').delete().eq('id', build.id);
-          if (error) throw error;
-          setSelectedBuild(null);
-          await loadBuilds();
-          Alert.alert('Asset Deleted');
-        } catch (e: any) {
-          Alert.alert('Delete Failed', e.message);
-        }
-      }}
-    ]);
+  // ==================== FIXED DELETE FUNCTION ====================
+   const deleteBuild = async (build: Build) => {
+    console.log("🗑️ Delete button pressed for build:", build.id, build.name);
+
+    const confirmed = Platform.OS === 'web' 
+      ? window.confirm(`Delete "${build.name}" and all its data?\n\nThis cannot be undone.`)
+      : false;   // We'll handle native Alert below if needed
+
+    if (!confirmed && Platform.OS !== 'web') {
+      // For native we can keep Alert, but for now let's use confirm for consistency
+      Alert.alert(
+        "Confirm Delete",
+        `Delete "${build.name}" and all its data?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { 
+            text: "Delete", 
+            style: "destructive",
+            onPress: () => performDelete(build)
+          }
+        ]
+      );
+      return;
+    }
+
+    if (confirmed || Platform.OS !== 'web') {
+      await performDelete(build);
+    }
   };
+
+  // Separate function that does the actual deletion
+  const performDelete = async (build: Build) => {
+    try {
+      console.log("🚀 Starting delete for build:", build.id);
+
+      // Delete media records
+      await supabase.from('media').delete().eq('build_id', build.id);
+      console.log("✅ Media records deleted");
+
+      // Delete model file
+      if (build.model_url) {
+        const filename = `${build.id}.glb`;
+        await supabase.storage.from('models').remove([filename]);
+        console.log("✅ Model file deleted");
+      }
+
+      // Delete the build
+      const { error } = await supabase.from('builds').delete().eq('id', build.id);
+
+      if (error) throw error;
+
+      console.log("✅ Build deleted successfully");
+
+      setSelectedBuild(null);
+      setMediaForSelected([]);
+      await loadBuilds();
+
+      Alert.alert("✅ Success", "Asset has been deleted.");
+
+    } catch (e: any) {
+      console.error("❌ Delete failed:", e);
+      Alert.alert("Delete Failed", e.message || "Unknown error");
+    }
+  };
+  // ============================================================
 
   const pickMedia = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -306,12 +354,6 @@ export default function App() {
       }
     }
   };
-
-  const stats = builds.reduce((acc: any, b: any) => {
-    const t = b.asset_type || 'default';
-    acc[t] = (acc[t] || 0) + 1;
-    return acc;
-  }, {});
 
   const globePoints = builds.filter(b => b.center_lat && b.center_lng).map((b, i) => ({
     ...b,
@@ -434,10 +476,16 @@ export default function App() {
               </View>
             )}
 
-            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#FF3B30', marginTop: 20 }]} onPress={() => deleteBuild(selectedBuild)}>
+            <TouchableOpacity 
+              style={[styles.actionBtn, { backgroundColor: '#FF3B30', marginTop: 20 }]} 
+              onPress={() => deleteBuild(selectedBuild)}
+            >
               <Text style={styles.actionBtnText}>🗑️ Delete Asset</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.closeBtn} onPress={closePanel}><Text style={styles.closeText}>Close</Text></TouchableOpacity>
+
+            <TouchableOpacity style={styles.closeBtn} onPress={closePanel}>
+              <Text style={styles.closeText}>Close</Text>
+            </TouchableOpacity>
           </ScrollView>
         </View>
       )}
@@ -521,7 +569,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* New Immersive 3D Viewer Modal */}
+      {/* 3D Viewer Modal */}
       <Modal
         visible={viewerVisible}
         animationType="slide"
