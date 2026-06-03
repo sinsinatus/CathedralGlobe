@@ -126,7 +126,7 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
     }
   };
 
-  // ===================== FIXED FOR WEB + NATIVE =====================
+  // ===================== DOCUMENT UPLOAD =====================
   const uploadAndCreateDocumentItem = async (uri: string, originalName: string, mimeType: string) => {
     console.log('📤 STARTING UPLOAD →', originalName);
     setIsUploading(true);
@@ -135,14 +135,12 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
       const storageName = `${buildId}_doc_${Date.now()}.${fileExt}`;
 
       const blob = await (await fetch(uri)).blob();
-      console.log('✅ Blob ready, size:', blob.size);
 
       const { error: uploadError } = await supabase.storage
         .from('media')
         .upload(storageName, blob, { contentType: mimeType });
 
       if (uploadError) throw uploadError;
-      console.log('✅ Uploaded to Supabase Storage');
 
       const { data: urlData } = supabase.storage.from('media').getPublicUrl(storageName);
 
@@ -162,9 +160,7 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
 
       if (insertError) throw insertError;
 
-      console.log('✅ Document fully saved in DB!');
       Alert.alert('✅ Document Added', `${originalName} is now attached`);
-
       const { data: refreshed } = await supabase.from('items').select('*').eq('build_id', buildId);
       setItems(refreshed || []);
     } catch (e: any) {
@@ -177,75 +173,99 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
 
   const pickAndUploadDocument = async (source: 'camera' | 'library' | 'files') => {
     setDocModalVisible(false);
-
     try {
       let uri: string;
       let name: string;
       let mimeType = 'application/octet-stream';
 
-      console.log(`🎯 Picker started for source: ${source}`);
-
       if (source === 'camera' || source === 'library') {
         const result = source === 'camera'
           ? await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 })
           : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.All, quality: 0.8 });
-
         if (result.canceled || !result.assets?.length) return;
         const asset = result.assets[0];
         uri = asset.uri;
         name = asset.fileName || `Media_${Date.now()}`;
         mimeType = asset.mimeType || 'image/jpeg';
       } else {
-        // === FIXED DOCUMENT PICKER (handles both Web and Native) ===
-        const result = await DocumentPicker.getDocumentAsync({
-          type: '*/*',
-          copyToCacheDirectory: true,
-        });
-
-        console.log('📄 DocumentPicker raw result:', JSON.stringify(result, null, 2));
-
-        if (result.canceled) {
-          console.log('User canceled picker');
-          return;
-        }
-
-        // Web returns { canceled, assets: [...] }
-        // Native returns { canceled, uri, name, mimeType }
+        const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
+        if (result.canceled) return;
         if ('assets' in result && result.assets && result.assets.length > 0) {
           const asset = result.assets[0];
           uri = asset.uri;
           name = asset.name || `Document_${Date.now()}`;
           mimeType = asset.mimeType || 'application/octet-stream';
-          console.log('✅ Web picker shape detected');
         } else if ('uri' in result && result.uri) {
           uri = result.uri;
           name = (result as any).name || `Document_${Date.now()}`;
           mimeType = (result as any).mimeType || 'application/octet-stream';
-          console.log('✅ Native picker shape detected');
-        } else {
-          console.error('Unknown DocumentPicker result shape');
-          return;
-        }
+        } else return;
       }
-
-      console.log('✅ File selected successfully:', { name, uri: uri.substring(0, 80) + '...' });
       await uploadAndCreateDocumentItem(uri, name, mimeType);
     } catch (e: any) {
-      console.error('❌ Picker error:', e);
       Alert.alert('Error', e.message || 'Something went wrong');
+    }
+  };
+
+  // ===================== DELETE ITEM (now fully responsive) =====================
+  const handleDeleteItem = (item: Item) => {
+    console.log('🗑️ Delete button pressed for item:', item.id, item.name); // ← DEBUG
+    Alert.alert(
+      'Delete Item',
+      `Delete "${item.name}"?\n\nThis cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            console.log('🚀 Deleting item from DB:', item.id);
+            const { error } = await supabase.from('items').delete().eq('id', item.id);
+            if (error) {
+              console.error('Delete error:', error);
+              Alert.alert('Delete Failed', error.message);
+            } else {
+              setItems(prev => prev.filter(i => i.id !== item.id));
+              if (selectedItem?.id === item.id) setSelectedItem(null);
+              Alert.alert('✅ Item Deleted');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleOpenDocument = (item: Item) => {
+    if (item.type === 'Document' && item.metadata?.documentUrl) {
+      if (Platform.OS === 'web') {
+        window.open(item.metadata.documentUrl, '_blank');
+      } else {
+        Alert.alert('Open Document', 'Document preview coming soon on mobile');
+      }
+    }
+  };
+
+  const handleItemPress = (item: Item) => {
+    if (item.type === 'Document') {
+      handleOpenDocument(item);
+    } else {
+      setSelectedItem(item);
     }
   };
 
   const getInstructions = () => {
     if (mode === 'explore') {
-      return Platform.OS === 'web' ? 'Drag to look • Scroll / mouse wheel to move closer • Click items to fly inside' : 'Swipe to explore • Pinch to zoom';
+      return Platform.OS === 'web'
+        ? 'Drag to look • Scroll / mouse wheel to move closer • Click items to fly inside'
+        : 'Swipe to explore • Pinch to zoom';
     }
-    return Platform.OS === 'web' ? 'Drag to rotate • Scroll / mouse wheel to zoom • Right-click + drag to pan' : 'One-finger drag to rotate • Two-finger pinch to zoom';
+    return Platform.OS === 'web'
+      ? 'Drag to rotate • Scroll / mouse wheel to zoom • Right-click + drag to pan'
+      : 'One-finger drag to rotate • Two-finger pinch to zoom';
   };
 
   return (
     <View style={styles.container}>
-      {/* ... header + canvas + sidebar unchanged ... */}
       <View style={styles.header}>
         <Text style={styles.title}>3D Digital Twin Explorer</Text>
         <TouchableOpacity onPress={onClose} style={styles.closeButton}>
@@ -280,13 +300,35 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
               <Text style={styles.emptyText}>No items yet. Add items or documents to start exploring inside!</Text>
             ) : (
               items.map(item => (
-                <TouchableOpacity key={item.id} style={[styles.itemRow, selectedItem?.id === item.id && styles.itemRowSelected]} onPress={() => setSelectedItem(item)}>
-                  {item.type === 'Document' ? <Text style={styles.documentIcon}>📄</Text> : <View style={styles.itemDot} />}
-                  <View style={styles.itemTextContainer}>
-                    <Text style={styles.itemName}>{item.name}</Text>
-                    <Text style={styles.itemType}>{item.type}</Text>
+                <View key={item.id} style={styles.itemRowContainer}>
+                  {/* Main clickable area */}
+                  <TouchableOpacity style={[styles.itemRow, selectedItem?.id === item.id && styles.itemRowSelected]} onPress={() => handleItemPress(item)}>
+                    {item.type === 'Document' ? (
+                      <Text style={styles.documentIcon}>📄</Text>
+                    ) : (
+                      <View style={styles.itemDot} />
+                    )}
+                    <View style={styles.itemTextContainer}>
+                      <Text style={styles.itemName}>{item.name}</Text>
+                      <Text style={styles.itemType}>{item.type}</Text>
+                    </View>
+                  </TouchableOpacity>
+
+                  {/* Actions (trash + optional link) – now guaranteed clickable */}
+                  <View style={styles.itemActions}>
+                    {item.type === 'Document' && (
+                      <TouchableOpacity style={styles.actionBtn} onPress={() => handleOpenDocument(item)}>
+                        <Text style={{ fontSize: 18 }}>🔗</Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity 
+                      style={styles.actionBtn} 
+                      onPress={() => handleDeleteItem(item)}
+                    >
+                      <Text style={{ fontSize: 20, color: '#FF3B30' }}>🗑️</Text>
+                    </TouchableOpacity>
                   </View>
-                </TouchableOpacity>
+                </View>
               ))
             )}
           </ScrollView>
@@ -306,7 +348,7 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
         <Text style={styles.instructionText}>{getInstructions()}</Text>
       </View>
 
-      {/* Modals unchanged except loading state */}
+      {/* Modals unchanged */}
       <Modal visible={addModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -370,7 +412,6 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
 }
 
 const styles = StyleSheet.create({
-  // (same styles as before - no changes needed)
   container: { flex: 1, backgroundColor: '#0a0a1f' },
   header: { padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1F1F1F', zIndex: 10 },
   title: { color: '#E8B923', fontSize: 18, fontWeight: 'bold' },
@@ -387,13 +428,16 @@ const styles = StyleSheet.create({
   modeText: { color: '#ccc', fontWeight: '600' },
   modeTextActive: { color: '#1F1F1F' },
   itemList: { flex: 1 },
-  itemRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#333' },
-  itemRowSelected: { backgroundColor: '#3A2C1F', borderRadius: 8 },
+  itemRowContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 6, gap: 8 },
+  itemRow: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 12, backgroundColor: '#2C2C2C', borderRadius: 8 },
+  itemRowSelected: { backgroundColor: '#3A2C1F' },
   itemDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#00D4FF', marginRight: 10 },
   documentIcon: { fontSize: 18, marginRight: 10 },
   itemTextContainer: { flex: 1 },
   itemName: { color: '#F5F0E6', fontSize: 15, fontWeight: '500' },
   itemType: { color: '#A8A39A', fontSize: 13 },
+  itemActions: { flexDirection: 'row', gap: 4 },
+  actionBtn: { padding: 8, justifyContent: 'center', alignItems: 'center' },
   addItemButton: { backgroundColor: '#E8B923', padding: 16, borderRadius: 999, alignItems: 'center' },
   addItemText: { color: '#1F1F1F', fontWeight: 'bold' },
   emptyText: { color: '#A8A39A', textAlign: 'center', marginTop: 40, fontStyle: 'italic' },
