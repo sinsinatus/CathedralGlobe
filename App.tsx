@@ -50,7 +50,7 @@ export default function App() {
 
   const [prompt, setPrompt] = useState('');
   const [selectedAssetType, setSelectedAssetType] = useState<'house' | 'car' | 'factory' | 'warehouse'>('house');
-  const [selectedMedia, setSelectedMedia] = useState<{ uri: string; type: 'photo' | 'video' } | null>(null);
+  const [selectedMedias, setSelectedMedias] = useState<{ uri: string; type: 'photo' | 'video' }[]>([]); // now multiple
   const [createHostedWallet, setCreateHostedWallet] = useState(true);
 
   const [useCurrentLocation, setUseCurrentLocation] = useState(true);
@@ -162,6 +162,22 @@ export default function App() {
     };
   };
 
+  // ===================== MULTIPLE MEDIA DURING CREATION =====================
+  const pickMedia = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      quality: 0.8,
+      allowsMultipleSelection: true,   // ← now allows many files
+    });
+    if (!result.canceled && result.assets.length > 0) {
+      const newMedias = result.assets.map(asset => {
+        const isVideo = asset.type === 'video' || asset.uri.includes('.mp4') || asset.uri.includes('.mov');
+        return { uri: asset.uri, type: isVideo ? 'video' : 'photo' as const };
+      });
+      setSelectedMedias(prev => [...prev, ...newMedias]);
+    }
+  };
+
   const generateTwin = async () => {
     if (!prompt.trim()) {
       Alert.alert('Missing Description', 'Please describe something to build.');
@@ -207,34 +223,79 @@ export default function App() {
       return;
     }
 
+    // Upload ALL selected media
+    for (const media of selectedMedias) {
+      try {
+        const fileExt = media.type === 'video' ? 'mp4' : 'jpg';
+        const fileName = `${build.id}_${Date.now()}_${Math.random().toString(36).slice(2)}.${fileExt}`;
+        const contentType = media.type === 'video' ? 'video/mp4' : 'image/jpeg';
+        const blob = await (await fetch(media.uri)).blob();
+        const { error: uploadError } = await supabase.storage.from('media').upload(fileName, blob, { contentType });
+        if (!uploadError) {
+          const { data: urlData } = supabase.storage.from('media').getPublicUrl(fileName);
+          await supabase.from('media').insert({ build_id: build.id, url: urlData.publicUrl, type: media.type });
+        }
+      } catch (e) {
+        console.error('Media upload failed', e);
+      }
+    }
+
+    // Trigger 3D generation
     try {
       await supabase.functions.invoke('generate-3d-model', {
         body: { build_id: build.id, prompt: prompt, asset_type: selectedAssetType },
       });
     } catch (e) {}
 
-    if (selectedMedia) {
-      try {
-        const fileExt = selectedMedia.type === 'video' ? 'mp4' : 'jpg';
-        const fileName = `${build.id}_${Date.now()}.${fileExt}`;
-        const contentType = selectedMedia.type === 'video' ? 'video/mp4' : 'image/jpeg';
-        const blob = await (await fetch(selectedMedia.uri)).blob();
-        const { error: uploadError } = await supabase.storage.from('media').upload(fileName, blob, { contentType });
-        if (!uploadError) {
-          const { data: urlData } = supabase.storage.from('media').getPublicUrl(fileName);
-          await supabase.from('media').insert({ build_id: build.id, url: urlData.publicUrl, type: selectedMedia.type });
-        }
-      } catch (e) {}
-    }
-
     setIsUploading(false);
     setModalVisible(false);
     setPrompt('');
-    setSelectedMedia(null);
+    setSelectedMedias([]);           // clear for next creation
     setManualAddress('');
     await loadBuilds();
 
     Alert.alert('✅ Asset Created!', `Build ID: ${build.id}`);
+  };
+
+  // ===================== ADD MORE MEDIA TO EXISTING ASSET =====================
+  const addMoreMediaToBuild = async () => {
+    if (!selectedBuild) return;
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      quality: 0.8,
+      allowsMultipleSelection: true,
+    });
+
+    if (result.canceled || !result.assets.length) return;
+
+    setIsUploading(true);
+
+    for (const asset of result.assets) {
+      try {
+        const isVideo = asset.type === 'video' || asset.uri.includes('.mp4') || asset.uri.includes('.mov');
+        const fileExt = isVideo ? 'mp4' : 'jpg';
+        const fileName = `${selectedBuild.id}_${Date.now()}_${Math.random().toString(36).slice(2)}.${fileExt}`;
+        const contentType = isVideo ? 'video/mp4' : 'image/jpeg';
+        const blob = await (await fetch(asset.uri)).blob();
+
+        const { error: uploadError } = await supabase.storage.from('media').upload(fileName, blob, { contentType });
+        if (!uploadError) {
+          const { data: urlData } = supabase.storage.from('media').getPublicUrl(fileName);
+          await supabase.from('media').insert({
+            build_id: selectedBuild.id,
+            url: urlData.publicUrl,
+            type: isVideo ? 'video' : 'photo'
+          });
+        }
+      } catch (e) {
+        console.error('Media upload failed', e);
+      }
+    }
+
+    setIsUploading(false);
+    await loadMediaForBuild(selectedBuild.id);
+    Alert.alert('✅ Media added', 'New files have been attached to this asset');
   };
 
   const deleteBuild = async (build: Build) => {
@@ -248,44 +309,24 @@ export default function App() {
           style: 'destructive',
           onPress: async () => {
             try {
-              console.log("🚀 Starting delete for build:", build.id);
-
               await supabase.from('media').delete().eq('build_id', build.id);
-
               if (build.model_url) {
                 const filename = `${build.id}.glb`;
                 await supabase.storage.from('models').remove([filename]);
               }
-
               const { error } = await supabase.from('builds').delete().eq('id', build.id);
-
               if (error) throw error;
-
               setSelectedBuild(null);
               setMediaForSelected([]);
               await loadBuilds();
-
               Alert.alert('✅ Asset Deleted Successfully');
             } catch (e: any) {
-              console.error("❌ Delete failed:", e);
               Alert.alert('Delete Failed', e.message || 'Unknown error');
             }
           }
         }
       ]
     );
-  };
-
-  const pickMedia = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
-      quality: 0.8,
-    });
-    if (!result.canceled && result.assets.length > 0) {
-      const asset = result.assets[0];
-      const isVideo = asset.type === 'video' || asset.uri.includes('.mp4') || asset.uri.includes('.mov');
-      setSelectedMedia({ uri: asset.uri, type: isVideo ? 'video' : 'photo' });
-    }
   };
 
   const handlePointClick = async (point: any) => {
@@ -325,6 +366,39 @@ export default function App() {
       } else {
         Alert.alert('Download', 'Download feature coming soon for mobile');
       }
+    }
+  };
+
+  const reGenerateModel = async () => {
+    if (!selectedBuild) return;
+
+    const confirmed = await new Promise<boolean>(resolve => {
+      Alert.alert(
+        'Re-generate 3D Model',
+        'This will create a new version using all current photos and videos.\n\nExisting items and metadata will NOT be deleted.',
+        [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Re-generate', onPress: () => resolve(true) }
+        ]
+      );
+    });
+
+    if (!confirmed) return;
+
+    try {
+      await supabase.functions.invoke('generate-3d-model', {
+        body: {
+          build_id: selectedBuild.id,
+          prompt: selectedBuild.initial_prompt,
+          asset_type: selectedBuild.asset_type,
+          re_generate: true
+        },
+      });
+
+      Alert.alert('✅ Re-generation started', 'New model will appear when ready');
+      await checkModelStatus(selectedBuild.id);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to start re-generation');
     }
   };
 
@@ -414,6 +488,13 @@ export default function App() {
                     </TouchableOpacity>
 
                     <TouchableOpacity 
+                      style={{ backgroundColor: '#E8B923', paddingVertical: 12, borderRadius: 10, alignItems: 'center' }}
+                      onPress={reGenerateModel}
+                    >
+                      <Text style={{ color: '#1F1F1F', fontWeight: 'bold' }}>🔄 Re-generate 3D with latest media</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity 
                       style={{ backgroundColor: '#444', paddingVertical: 12, borderRadius: 10, alignItems: 'center' }}
                       onPress={downloadModel}
                     >
@@ -432,9 +513,10 @@ export default function App() {
               </View>
             )}
 
+            {/* Media section - now shows all attached files */}
             {mediaForSelected.length > 0 && (
               <View style={{ marginTop: 16 }}>
-                <Text style={{ color: '#A8A39A', marginBottom: 6 }}>Attached Media</Text>
+                <Text style={{ color: '#A8A39A', marginBottom: 6 }}>Attached Media ({mediaForSelected.length})</Text>
                 {mediaForSelected.map(m => (
                   <View key={m.id} style={{ marginBottom: 8 }}>
                     {m.type === 'photo' ? (
@@ -449,6 +531,14 @@ export default function App() {
               </View>
             )}
 
+            {/* New button: Add more media after creation */}
+            <TouchableOpacity 
+              style={[styles.actionBtn, { backgroundColor: '#00D4FF', marginTop: 12 }]} 
+              onPress={addMoreMediaToBuild}
+            >
+              <Text style={styles.actionBtnText}>+ Add more photos / videos</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#FF3B30', marginTop: 20 }]} onPress={() => deleteBuild(selectedBuild)}>
               <Text style={styles.actionBtnText}>🗑️ Delete Asset</Text>
             </TouchableOpacity>
@@ -457,7 +547,7 @@ export default function App() {
         </View>
       )}
 
-      {/* Asset Creation Modal */}
+      {/* Asset Creation Modal - now supports multiple files */}
       <Modal visible={modalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -474,10 +564,13 @@ export default function App() {
 
             <TouchableOpacity style={styles.photoButton} onPress={pickMedia}>
               <Text style={styles.photoButtonText}>
-                {selectedMedia ? `✓ ${selectedMedia.type} selected` : '+ Add Photo or Video (optional)'}
+                {selectedMedias.length > 0 
+                  ? `✓ ${selectedMedias.length} file(s) selected` 
+                  : '+ Add Photos or Videos (multiple allowed)'}
               </Text>
             </TouchableOpacity>
 
+            {/* Location, wallet, asset type sections unchanged */}
             <View style={{ marginTop: 16 }}>
               <Text style={styles.typeLabel}>Location</Text>
               <View style={{ flexDirection: 'row', backgroundColor: '#2C2C2C', borderRadius: 999, padding: 4 }}>
@@ -530,7 +623,7 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* 3D Viewer Modal - NOW PASSES buildId */}
+      {/* 3D Viewer Modal */}
       <Modal
         visible={viewerVisible}
         animationType="slide"

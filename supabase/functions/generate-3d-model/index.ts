@@ -20,32 +20,41 @@ serve(async (req) => {
   }
 
   try {
-    const { build_id, prompt, asset_type } = await req.json();
+    const { build_id, prompt, asset_type, re_generate = false } = await req.json();
 
     if (!MESHY_API_KEY) throw new Error("MESHY_API_KEY is not set");
-    if (!build_id || !prompt) throw new Error("build_id and prompt required");
+    if (!build_id) throw new Error("build_id required");
 
-    // Advanced asset-type aware prompt engineering
-    let basePrompt = prompt.trim();
+    // Fetch ALL media attached to this build (new photos/videos become reference images)
+    const { data: media } = await supabase
+      .from('media')
+      .select('url')
+      .eq('build_id', build_id)
+      .order('created_at', { ascending: true });
+
+    const referenceImages = media?.map(m => m.url) || [];
+
+    let basePrompt = prompt || "modern residential building";
 
     const qualityBoosters = `
-      highly detailed, ultra realistic, architectural visualization, 
-      PBR materials, clean topology, game-ready, professional 3D asset, 
-      natural lighting, realistic scale, sharp details, 8k quality
+      ultra realistic, photorealistic digital twin, architectural visualization, 
+      PBR materials, physically based rendering, clean topology, game-ready, 
+      natural indoor lighting, soft shadows, realistic scale, sharp details, 8k quality, 
+      highly detailed interior with visible rooms and furniture
     `.trim();
 
     let enhancedPrompt = "";
 
-    switch (asset_type) {
+    switch (asset_type?.toLowerCase()) {
       case 'house':
-        enhancedPrompt = `Modern residential ${basePrompt}, large windows clearly showing detailed interior spaces, open floor plan, visible rooms, furniture, realistic interior lighting, full exterior and interior visible, photorealistic digital twin`;
+        enhancedPrompt = `Modern residential interior and exterior of ${basePrompt}. Detailed open floor plan, clearly visible multiple rooms, realistic furniture, natural light through windows, photorealistic digital twin`;
         break;
       case 'car':
-        enhancedPrompt = `Realistic ${basePrompt}, highly detailed vehicle, accurate proportions, realistic materials (glass, metal, rubber, paint), interior visible through windows, studio lighting, automotive photography style`;
+        enhancedPrompt = `Realistic ${basePrompt} vehicle with detailed interior and exterior`;
         break;
       case 'factory':
       case 'warehouse':
-        enhancedPrompt = `Industrial ${basePrompt}, large factory/warehouse building, detailed exterior with loading docks and windows, visible interior machinery and structure, industrial realism, cinematic lighting`;
+        enhancedPrompt = `Industrial ${basePrompt} with detailed interior machinery and structure`;
         break;
       default:
         enhancedPrompt = basePrompt;
@@ -53,7 +62,24 @@ serve(async (req) => {
 
     const finalPrompt = `${enhancedPrompt}, ${qualityBoosters}`.replace(/\s+/g, ' ');
 
-    console.log(`[generate-3d-model] Final prompt for ${asset_type}: ${finalPrompt}`);
+    console.log(`[generate-3d-model] Build ${build_id} | Re-generate: ${re_generate} | Reference images: ${referenceImages.length}`);
+
+    const body: any = {
+      mode: "preview",
+      prompt: finalPrompt,
+      ai_model: "meshy-6",
+      art_style: "realistic",
+      should_remesh: true,
+      model_type: "standard",
+    };
+
+    // Use uploaded media as reference images (this is what makes re-generation powerful)
+    if (referenceImages.length > 0) {
+      body.texture_image_url = referenceImages[0];
+      if (referenceImages.length > 1) {
+        body.reference_image_urls = referenceImages.slice(1);
+      }
+    }
 
     const response = await fetch("https://api.meshy.ai/openapi/v2/text-to-3d", {
       method: "POST",
@@ -61,12 +87,7 @@ serve(async (req) => {
         "Authorization": `Bearer ${MESHY_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        mode: "preview",
-        prompt: finalPrompt,
-        art_style: "realistic",
-        should_remesh: true,
-      }),
+      body: JSON.stringify(body),
     });
 
     const data = await response.json();
@@ -84,7 +105,7 @@ serve(async (req) => {
       model_provider: "meshy",
     }).eq("id", build_id);
 
-    return new Response(JSON.stringify({ success: true, task_id: taskId }), {
+    return new Response(JSON.stringify({ success: true, task_id: taskId, re_generate }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 

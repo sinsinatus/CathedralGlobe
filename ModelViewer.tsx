@@ -20,9 +20,10 @@ interface Item {
   metadata: any;
 }
 
+// ===================== 3D SCENE WITH MANUAL WHEEL ZOOM FIX =====================
 function ViewerScene({ modelUrl, selectedItem }: { modelUrl: string; selectedItem: Item | null }) {
   const controlsRef = useRef<any>(null);
-  const { camera } = useThree();
+  const { camera, gl } = useThree();
   const [flyTarget, setFlyTarget] = useState<{ position: THREE.Vector3; target: THREE.Vector3 } | null>(null);
 
   const { scene } = useGLTF(modelUrl);
@@ -33,6 +34,23 @@ function ViewerScene({ modelUrl, selectedItem }: { modelUrl: string; selectedIte
     }
   });
 
+  // Manual wheel zoom fix for Expo Web
+  useEffect(() => {
+    const canvas = gl.domElement;
+    if (!canvas) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY > 0 ? 1.12 : 0.88;
+      camera.position.multiplyScalar(zoomFactor);
+      if (controlsRef.current) controlsRef.current.update();
+    };
+
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', handleWheel);
+  }, [gl, camera]);
+
+  // Fly-to interior when item is clicked
   useEffect(() => {
     if (selectedItem && controlsRef.current) {
       const interiorPos = new THREE.Vector3(0, 5, 9);
@@ -46,10 +64,7 @@ function ViewerScene({ modelUrl, selectedItem }: { modelUrl: string; selectedIte
       camera.position.lerp(flyTarget.position, 0.15);
       controlsRef.current.target.lerp(flyTarget.target, 0.15);
       controlsRef.current.update();
-
-      if (camera.position.distanceTo(flyTarget.position) < 1) {
-        setFlyTarget(null);
-      }
+      if (camera.position.distanceTo(flyTarget.position) < 1) setFlyTarget(null);
     }
   });
 
@@ -66,8 +81,8 @@ function ViewerScene({ modelUrl, selectedItem }: { modelUrl: string; selectedIte
         enablePan={true}
         enableZoom={true}
         enableRotate={true}
-        minDistance={2}
-        maxDistance={80}
+        minDistance={0.5}
+        maxDistance={120}
         zoomSpeed={4}
         rotateSpeed={0.8}
         panSpeed={1.5}
@@ -207,9 +222,9 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
     }
   };
 
-  // ===================== DELETE ITEM (now fully responsive) =====================
+  // ===================== DELETE ITEM =====================
   const handleDeleteItem = (item: Item) => {
-    console.log('🗑️ Delete button pressed for item:', item.id, item.name); // ← DEBUG
+    console.log('🗑️ Delete button pressed for item:', item.id, item.name);
     Alert.alert(
       'Delete Item',
       `Delete "${item.name}"?\n\nThis cannot be undone.`,
@@ -219,10 +234,8 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            console.log('🚀 Deleting item from DB:', item.id);
             const { error } = await supabase.from('items').delete().eq('id', item.id);
             if (error) {
-              console.error('Delete error:', error);
               Alert.alert('Delete Failed', error.message);
             } else {
               setItems(prev => prev.filter(i => i.id !== item.id));
@@ -301,30 +314,21 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
             ) : (
               items.map(item => (
                 <View key={item.id} style={styles.itemRowContainer}>
-                  {/* Main clickable area */}
                   <TouchableOpacity style={[styles.itemRow, selectedItem?.id === item.id && styles.itemRowSelected]} onPress={() => handleItemPress(item)}>
-                    {item.type === 'Document' ? (
-                      <Text style={styles.documentIcon}>📄</Text>
-                    ) : (
-                      <View style={styles.itemDot} />
-                    )}
+                    {item.type === 'Document' ? <Text style={styles.documentIcon}>📄</Text> : <View style={styles.itemDot} />}
                     <View style={styles.itemTextContainer}>
                       <Text style={styles.itemName}>{item.name}</Text>
                       <Text style={styles.itemType}>{item.type}</Text>
                     </View>
                   </TouchableOpacity>
 
-                  {/* Actions (trash + optional link) – now guaranteed clickable */}
                   <View style={styles.itemActions}>
                     {item.type === 'Document' && (
                       <TouchableOpacity style={styles.actionBtn} onPress={() => handleOpenDocument(item)}>
                         <Text style={{ fontSize: 18 }}>🔗</Text>
                       </TouchableOpacity>
                     )}
-                    <TouchableOpacity 
-                      style={styles.actionBtn} 
-                      onPress={() => handleDeleteItem(item)}
-                    >
+                    <TouchableOpacity style={styles.actionBtn} onPress={() => handleDeleteItem(item)}>
                       <Text style={{ fontSize: 20, color: '#FF3B30' }}>🗑️</Text>
                     </TouchableOpacity>
                   </View>
@@ -348,7 +352,7 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
         <Text style={styles.instructionText}>{getInstructions()}</Text>
       </View>
 
-      {/* Modals unchanged */}
+      {/* Add New Item Modal */}
       <Modal visible={addModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -374,6 +378,7 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
         </View>
       </Modal>
 
+      {/* Add Document Modal */}
       <Modal visible={docModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
