@@ -22,17 +22,36 @@ serve(async (req) => {
     if (!GROK_API_KEY) throw new Error("GROK_API_KEY not set");
     if (!build_id || !message) throw new Error("build_id and message required");
 
-    // Fetch full asset context
+    // Fetch full asset context + ALL media URLs
     const { data: build } = await supabase.from('builds').select('*').eq('id', build_id).single();
     const { data: items } = await supabase.from('items').select('*').eq('build_id', build_id);
-    const { data: media } = await supabase.from('media').select('*').eq('build_id', build_id);
+    const { data: media } = await supabase.from('media').select('url, type').eq('build_id', build_id);
+
+    const imageUrls = media?.filter(m => m.type === 'photo').map(m => m.url) || [];
 
     const context = `
 Asset: ${build?.name || 'Unknown'} (${build?.asset_type || 'Unknown'})
 Initial prompt: ${build?.initial_prompt || 'None'}
-Items (${items?.length || 0}): ${items?.map(i => `${i.name} (${i.type})`).join(', ') || 'None'}
-Media (${media?.length || 0} files attached)
+Items: ${items?.map(i => `${i.name} (${i.type})`).join(', ') || 'None'}
+Media: ${media?.length || 0} files attached
     `.trim();
+
+    // Build multimodal messages for Grok
+    const messages: any[] = [
+      {
+        role: "system",
+        content: `You are Grok, an expert AI assistant for CathedralGlobe digital twins.
+You have full context of the asset. You can see and analyse images if URLs are provided.
+Be concise, insightful and proactive.\nContext:\n${context}`
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: message },
+          ...imageUrls.map(url => ({ type: "image_url", image_url: { url } }))
+        ]
+      }
+    ];
 
     const response = await fetch("https://api.x.ai/v1/chat/completions", {
       method: "POST",
@@ -41,27 +60,14 @@ Media (${media?.length || 0} files attached)
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "grok-4.3",                    // ← Updated to current flagship model
-        messages: [
-          {
-            role: "system",
-            content: `You are Grok, an expert AI assistant for CathedralGlobe digital twins. 
-You have full context of the current asset. Be concise, helpful, and proactive.
-Context:\n${context}`
-          },
-          { role: "user", content: message }
-        ],
+        model: "grok-4.3",
+        messages: messages,
         temperature: 0.7,
-        max_tokens: 1024,
+        max_tokens: 1200,
       }),
     });
 
     const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(`Grok API error: ${data.error?.message || JSON.stringify(data)}`);
-    }
-
     const reply = data.choices?.[0]?.message?.content || "Sorry, I couldn't generate a response.";
 
     return new Response(JSON.stringify({ success: true, reply }), {
