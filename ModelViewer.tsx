@@ -6,6 +6,7 @@ import { Canvas, useThree, useFrame } from '@react-three/fiber/native';
 import { OrbitControls, Stage, useGLTF } from '@react-three/drei/native';
 import * as THREE from 'three';
 import { supabase } from './src/lib/supabase';
+import AssetAIAssistant from './AssetAIAssistant';   // ← NEW IMPORT
 
 interface Props {
   modelUrl: string;
@@ -20,7 +21,6 @@ interface Item {
   metadata: any;
 }
 
-// ===================== 3D SCENE WITH MANUAL WHEEL ZOOM FIX =====================
 function ViewerScene({ modelUrl, selectedItem }: { modelUrl: string; selectedItem: Item | null }) {
   const controlsRef = useRef<any>(null);
   const { camera, gl } = useThree();
@@ -41,8 +41,9 @@ function ViewerScene({ modelUrl, selectedItem }: { modelUrl: string; selectedIte
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const zoomFactor = e.deltaY > 0 ? 1.12 : 0.88;
-      camera.position.multiplyScalar(zoomFactor);
+      e.stopImmediatePropagation();
+      const factor = e.deltaY > 0 ? 1.15 : 0.85;
+      camera.position.multiplyScalar(factor);
       if (controlsRef.current) controlsRef.current.update();
     };
 
@@ -50,7 +51,6 @@ function ViewerScene({ modelUrl, selectedItem }: { modelUrl: string; selectedIte
     return () => canvas.removeEventListener('wheel', handleWheel);
   }, [gl, camera]);
 
-  // Fly-to interior when item is clicked
   useEffect(() => {
     if (selectedItem && controlsRef.current) {
       const interiorPos = new THREE.Vector3(0, 5, 9);
@@ -102,6 +102,7 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [addModalVisible, setAddModalVisible] = useState(false);
   const [docModalVisible, setDocModalVisible] = useState(false);
+  const [aiModalVisible, setAiModalVisible] = useState(false);        // ← NEW
   const [isUploading, setIsUploading] = useState(false);
   const [newItemName, setNewItemName] = useState('');
   const [newItemType, setNewItemType] = useState('Room');
@@ -141,7 +142,7 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
     }
   };
 
-  // ===================== DOCUMENT UPLOAD =====================
+  // Document upload functions (unchanged)
   const uploadAndCreateDocumentItem = async (uri: string, originalName: string, mimeType: string) => {
     console.log('📤 STARTING UPLOAD →', originalName);
     setIsUploading(true);
@@ -222,7 +223,6 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
     }
   };
 
-  // ===================== DELETE ITEM =====================
   const handleDeleteItem = (item: Item) => {
     console.log('🗑️ Delete button pressed for item:', item.id, item.name);
     Alert.alert(
@@ -337,7 +337,15 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
             )}
           </ScrollView>
 
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+          {/* === GROK AI AGENT BUTTON === */}
+          <TouchableOpacity 
+            style={[styles.addItemButton, { backgroundColor: '#00D4FF', marginBottom: 8 }]} 
+            onPress={() => setAiModalVisible(true)}
+          >
+            <Text style={styles.addItemText}>🧠 Grok AI Agent</Text>
+          </TouchableOpacity>
+
+          <View style={{ flexDirection: 'row', gap: 8 }}>
             <TouchableOpacity style={[styles.addItemButton, { flex: 1 }]} onPress={handleAddPress}>
               <Text style={styles.addItemText}>+ Add New Item</Text>
             </TouchableOpacity>
@@ -411,6 +419,16 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
             </TouchableOpacity>
           </View>
         </View>
+      </Modal>
+
+      {/* === GROK AI AGENT MODAL === */}
+      <Modal 
+        visible={aiModalVisible} 
+        animationType="slide" 
+        presentationStyle="pageSheet" 
+        onRequestClose={() => setAiModalVisible(false)}
+      >
+        <AssetAIAssistant buildId={buildId} onClose={() => setAiModalVisible(false)} />
       </Modal>
     </View>
   );
