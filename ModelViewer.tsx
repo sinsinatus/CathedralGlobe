@@ -1,3 +1,5 @@
+// ModelViewer.tsx — FULL FILE WITH COMPLETE PARENT_ID DOCUMENT ATTACHMENT FIX
+
 import React, { Suspense, useState, useEffect, useRef } from 'react';
 import { View, TouchableOpacity, Text, StyleSheet, ScrollView, Modal, TextInput, Alert, Platform, ActivityIndicator } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -6,7 +8,8 @@ import { Canvas, useThree, useFrame } from '@react-three/fiber/native';
 import { OrbitControls, Stage, useGLTF } from '@react-three/drei/native';
 import * as THREE from 'three';
 import { supabase } from './src/lib/supabase';
-import AssetAIAssistant from './AssetAIAssistant';   // ← NEW IMPORT
+import AssetAIAssistant from './AssetAIAssistant';
+import ItemDetailModal from './ItemDetailModal';
 
 interface Props {
   modelUrl: string;
@@ -34,7 +37,6 @@ function ViewerScene({ modelUrl, selectedItem }: { modelUrl: string; selectedIte
     }
   });
 
-  // Manual wheel zoom fix for Expo Web
   useEffect(() => {
     const canvas = gl.domElement;
     if (!canvas) return;
@@ -97,26 +99,38 @@ function ViewerScene({ modelUrl, selectedItem }: { modelUrl: string; selectedIte
   );
 }
 
-export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
+export default function ModelViewer({ 
+  modelUrl, 
+  buildId, 
+  onClose 
+}: Props) {
   const [items, setItems] = useState<Item[]>([]);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [addModalVisible, setAddModalVisible] = useState(false);
   const [docModalVisible, setDocModalVisible] = useState(false);
-  const [aiModalVisible, setAiModalVisible] = useState(false);        // ← NEW
+  const [aiModalVisible, setAiModalVisible] = useState(false);
+  const [detailModalVisible, setDetailModalVisible] = useState(false);
+  const [selectedItemForDetail, setSelectedItemForDetail] = useState<Item | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [newItemName, setNewItemName] = useState('');
   const [newItemType, setNewItemType] = useState('Room');
   const [mode, setMode] = useState<'orbit' | 'explore'>('orbit');
+  const [pendingDocumentParentId, setPendingDocumentParentId] = useState<string | null>(null); // ← NEW
 
   const itemTypes = ['Room', 'Furniture', 'System', 'Feature', 'Appliance', 'Other'];
 
+  const fetchItems = async () => {
+    const { data } = await supabase.from('items').select('*').eq('build_id', buildId);
+    setItems(data || []);
+  };
+
   useEffect(() => {
-    const fetchItems = async () => {
-      const { data } = await supabase.from('items').select('*').eq('build_id', buildId);
-      setItems(data || []);
-    };
     if (buildId) fetchItems();
   }, [buildId]);
+
+  const refreshItems = () => {
+    fetchItems();
+  };
 
   const handleAddPress = () => setAddModalVisible(true);
 
@@ -137,13 +151,17 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
       Alert.alert('✅ Item Added', `${newItemName} was added successfully`);
       setAddModalVisible(false);
       setNewItemName('');
-      const { data: refreshed } = await supabase.from('items').select('*').eq('build_id', buildId);
-      setItems(refreshed || []);
+      fetchItems();
     }
   };
 
-  // Document upload functions (unchanged)
-  const uploadAndCreateDocumentItem = async (uri: string, originalName: string, mimeType: string) => {
+  // UPDATED: Supports attaching documents to a specific item via parent_id
+  const uploadAndCreateDocumentItem = async (
+    uri: string, 
+    originalName: string, 
+    mimeType: string, 
+    parentId?: string | null
+  ) => {
     console.log('📤 STARTING UPLOAD →', originalName);
     setIsUploading(true);
     try {
@@ -164,6 +182,7 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
         .from('items')
         .insert({
           build_id: buildId,
+          parent_id: parentId || null,                    // ← KEY FIX
           name: originalName,
           type: 'Document',
           metadata: {
@@ -176,18 +195,19 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
 
       if (insertError) throw insertError;
 
-      Alert.alert('✅ Document Added', `${originalName} is now attached`);
-      const { data: refreshed } = await supabase.from('items').select('*').eq('build_id', buildId);
-      setItems(refreshed || []);
+      Alert.alert('✅ Document Added', `${originalName} is now attached to the item`);
+      fetchItems();
     } catch (e: any) {
       console.error('❌ Upload failed:', e);
       Alert.alert('Upload Failed', e.message || 'Could not save document');
     } finally {
       setIsUploading(false);
+      setPendingDocumentParentId(null);
     }
   };
 
-  const pickAndUploadDocument = async (source: 'camera' | 'library' | 'files') => {
+  // UPDATED: Accepts optional parentId
+  const pickAndUploadDocument = async (source: 'camera' | 'library' | 'files', parentId?: string | null) => {
     setDocModalVisible(false);
     try {
       let uri: string;
@@ -217,7 +237,9 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
           mimeType = (result as any).mimeType || 'application/octet-stream';
         } else return;
       }
-      await uploadAndCreateDocumentItem(uri, name, mimeType);
+
+      const finalParentId = parentId || pendingDocumentParentId;
+      await uploadAndCreateDocumentItem(uri, name, mimeType, finalParentId);
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Something went wrong');
     }
@@ -264,6 +286,17 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
     } else {
       setSelectedItem(item);
     }
+  };
+
+  const handleEditItem = (item: Item) => {
+    setSelectedItemForDetail(item);
+    setDetailModalVisible(true);
+  };
+
+  // NEW: Called from ItemDetailModal when attaching a document to a specific item
+  const handleAttachDocumentToItem = (parentItemId: string) => {
+    setPendingDocumentParentId(parentItemId);
+    setDocModalVisible(true);
   };
 
   const getInstructions = () => {
@@ -314,7 +347,10 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
             ) : (
               items.map(item => (
                 <View key={item.id} style={styles.itemRowContainer}>
-                  <TouchableOpacity style={[styles.itemRow, selectedItem?.id === item.id && styles.itemRowSelected]} onPress={() => handleItemPress(item)}>
+                  <TouchableOpacity 
+                    style={[styles.itemRow, selectedItem?.id === item.id && styles.itemRowSelected]} 
+                    onPress={() => handleItemPress(item)}
+                  >
                     {item.type === 'Document' ? <Text style={styles.documentIcon}>📄</Text> : <View style={styles.itemDot} />}
                     <View style={styles.itemTextContainer}>
                       <Text style={styles.itemName}>{item.name}</Text>
@@ -328,6 +364,11 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
                         <Text style={{ fontSize: 18 }}>🔗</Text>
                       </TouchableOpacity>
                     )}
+
+                    <TouchableOpacity style={styles.actionBtn} onPress={() => handleEditItem(item)}>
+                      <Text style={{ fontSize: 18 }}>✏️</Text>
+                    </TouchableOpacity>
+
                     <TouchableOpacity style={styles.actionBtn} onPress={() => handleDeleteItem(item)}>
                       <Text style={{ fontSize: 20, color: '#FF3B30' }}>🗑️</Text>
                     </TouchableOpacity>
@@ -337,7 +378,6 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
             )}
           </ScrollView>
 
-          {/* === GROK AI AGENT BUTTON === */}
           <TouchableOpacity 
             style={[styles.addItemButton, { backgroundColor: '#00D4FF', marginBottom: 8 }]} 
             onPress={() => setAiModalVisible(true)}
@@ -421,15 +461,32 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
         </View>
       </Modal>
 
-      {/* === GROK AI AGENT MODAL === */}
+      {/* GROK AI AGENT MODAL */}
       <Modal 
         visible={aiModalVisible} 
         animationType="slide" 
         presentationStyle="pageSheet" 
         onRequestClose={() => setAiModalVisible(false)}
       >
-        <AssetAIAssistant buildId={buildId} onClose={() => setAiModalVisible(false)} />
+        <AssetAIAssistant 
+          buildId={buildId} 
+          onClose={() => setAiModalVisible(false)}
+          onItemsRefreshed={refreshItems}
+        />
       </Modal>
+
+      {/* ITEM DETAIL MODAL */}
+      <ItemDetailModal
+        visible={detailModalVisible}
+        item={selectedItemForDetail}
+        items={items}
+        onClose={() => {
+          setDetailModalVisible(false);
+          setSelectedItemForDetail(null);
+        }}
+        onSaved={refreshItems}
+        onAttachDocument={handleAttachDocumentToItem}   // ← Enables correct parent_id linking
+      />
     </View>
   );
 }

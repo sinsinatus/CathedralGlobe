@@ -1,3 +1,5 @@
+// AssetAIAssistant.tsx — AMENDED WITH AUTO-REFRESH (10 June 2026)
+
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, Switch, Pressable } from 'react-native';
 import { supabase } from './src/lib/supabase';
@@ -5,9 +7,10 @@ import { supabase } from './src/lib/supabase';
 interface Props {
   buildId: string;
   onClose: () => void;
+  onItemsRefreshed?: () => void;   // ← NEW
 }
 
-export default function AssetAIAssistant({ buildId, onClose }: Props) {
+export default function AssetAIAssistant({ buildId, onClose, onItemsRefreshed }: Props) {
   const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -19,7 +22,6 @@ export default function AssetAIAssistant({ buildId, onClose }: Props) {
   const [showTriggers, setShowTriggers] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
 
-  // Load current auto-triggers
   useEffect(() => {
     const loadTriggers = async () => {
       const { data } = await supabase.from('builds').select('auto_triggers').eq('id', buildId).single();
@@ -32,7 +34,6 @@ export default function AssetAIAssistant({ buildId, onClose }: Props) {
     const text = customMessage || input.trim();
     if (!text || isLoading) return;
 
-    // Add user message immediately for better UX
     const userMessage = { role: 'user' as const, content: text };
     setMessages(prev => [...prev, userMessage]);
     setInput('');
@@ -50,7 +51,67 @@ export default function AssetAIAssistant({ buildId, onClose }: Props) {
       setMessages(prev => [...prev, { role: 'assistant', content: data.reply }]);
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Something went wrong');
-      // Remove the user message if the call completely failed
+      setMessages(prev => prev.slice(0, -1));
+    } finally {
+      setIsLoading(false);
+      scrollViewRef.current?.scrollToEnd({ animated: true });
+    }
+  };
+
+  // ===================== META-TAGGING ACTION (now with auto-refresh) =====================
+  const handleMetaTagMedia = async () => {
+    const metaPrompt = `META-TAG MODE ACTIVATED.
+Analyze EVERY photo and video attached to this asset.
+Identify every distinct physical item, room, feature, appliance, system, or object you can see.
+
+Return ONLY valid JSON with this exact structure (no extra text, no markdown):
+
+{
+  "items": [
+    {
+      "name": "string",
+      "type": "Room|Furniture|System|Feature|Appliance|Other",
+      "description": "short clear description",
+      "metadata": {
+        "detected_from": "filename or media_id",
+        "confidence": 0.92,
+        "tags": ["tag1", "tag2"],
+        "detected_at": "ISO timestamp"
+      }
+    }
+  ]
+}`;
+
+    setMessages(prev => [...prev, { role: 'user' as const, content: '🔍 Running meta-tagging on all media...' }]);
+    setIsLoading(true);
+
+    try {
+      const { data, error } = await supabase.functions.invoke('asset-ai-agent', {
+        body: { 
+          build_id: buildId, 
+          message: metaPrompt,
+          mode: 'meta_tag'
+        },
+      });
+
+      if (error || !data?.success) throw new Error(data?.error || 'Failed');
+
+      // Auto-refresh the main asset viewer sidebar
+      if (data.createdCount && data.createdCount > 0) {
+        onItemsRefreshed?.();
+      }
+
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: data.reply || `✅ Successfully created ${data.createdCount || 0} new items from media!` 
+      }]);
+
+      Alert.alert(
+        '🎉 Meta-Tagging Complete',
+        `✅ ${data.createdCount || 0} new items were added to the asset.\n\nThe sidebar has been refreshed automatically.`
+      );
+    } catch (e: any) {
+      Alert.alert('Meta-Tag Failed', e.message);
       setMessages(prev => prev.slice(0, -1));
     } finally {
       setIsLoading(false);
@@ -65,12 +126,7 @@ export default function AssetAIAssistant({ buildId, onClose }: Props) {
     await supabase.from('builds').update({ auto_triggers: updated }).eq('id', buildId);
   };
 
-  const runAllEnabledTriggers = async () => {
-    // ... (same as before - optional)
-    Alert.alert('Monthly Triggers', 'This feature is coming soon.');
-  };
-
-  const suggestedActions = [
+  const suggestedActions = [   
     { label: "📸 Analyse all images", prompt: "Analyse every photo and video attached to this asset. Describe what you see in detail." },
     { label: "📋 Summarise this asset", prompt: "Give me a concise summary of this entire asset including items and media." },
     { label: "🔍 Check for issues", prompt: "Are there any potential maintenance issues or red flags?" },
@@ -85,6 +141,12 @@ export default function AssetAIAssistant({ buildId, onClose }: Props) {
           <Text style={styles.closeText}>✕</Text>
         </TouchableOpacity>
       </View>
+
+      {/* META-TAG BUTTON — prominent */}
+      <TouchableOpacity style={styles.metaTagButton} onPress={handleMetaTagMedia}>
+        <Text style={styles.metaTagText}>🔍 META-TAG ALL MEDIA</Text>
+        <Text style={styles.metaTagSubtext}>Auto-detect items, label them & create in database</Text>
+      </TouchableOpacity>
 
       <Pressable onPress={() => setShowTriggers(!showTriggers)} style={styles.triggersHeader}>
         <Text style={styles.sectionTitle}>Auto Triggers (Monthly) ▼</Text>
@@ -144,6 +206,27 @@ const styles = StyleSheet.create({
   header: { padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1F1F1F' },
   title: { color: '#E8B923', fontSize: 18, fontWeight: 'bold' },
   closeText: { color: '#00D4FF', fontSize: 20 },
+  
+  // META-TAG STYLES
+  metaTagButton: { 
+    backgroundColor: '#00D4FF', 
+    margin: 12, 
+    padding: 16, 
+    borderRadius: 16, 
+    alignItems: 'center' 
+  },
+  metaTagText: { 
+    color: '#1F1F1F', 
+    fontSize: 18, 
+    fontWeight: '700' 
+  },
+  metaTagSubtext: { 
+    color: '#1F1F1F', 
+    fontSize: 13, 
+    marginTop: 4, 
+    opacity: 0.8 
+  },
+
   triggersHeader: { backgroundColor: '#1F1F1F', padding: 12, borderBottomWidth: 1, borderBottomColor: '#333' },
   sectionTitle: { color: '#A8A39A', fontSize: 14, fontWeight: '600' },
   triggersSection: { backgroundColor: '#1F1F1F', padding: 12, gap: 12 },
