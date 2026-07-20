@@ -1,4 +1,4 @@
-// ModelViewer.tsx — COMPLETE CLEAN VERSION WITH EXTERIOR / INTERIOR SWITCHING
+// ModelViewer.tsx
 
 import React, { Suspense, useState, useEffect } from 'react';
 import { View, TouchableOpacity, Text, StyleSheet, ScrollView, Modal, TextInput, Alert, Platform, ActivityIndicator } from 'react-native';
@@ -11,10 +11,38 @@ import ItemDetailModal from './ItemDetailModal';
 import ExteriorViewer from './ExteriorViewer';
 import InteriorViewer from './InteriorViewer';
 
+// ==================== ERROR BOUNDARY ====================
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("3D Viewer crashed:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
+}
+
+// ==================== MAIN COMPONENT ====================
 interface Props {
   modelUrl: string;
   buildId: string;
   onClose: () => void;
+  interiorModelUrl?: string;
 }
 
 interface Item {
@@ -24,7 +52,7 @@ interface Item {
   metadata: any;
 }
 
-export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
+export default function ModelViewer({ modelUrl, buildId, onClose, interiorModelUrl }: Props) {
   const [items, setItems] = useState<Item[]>([]);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [addModalVisible, setAddModalVisible] = useState(false);
@@ -53,7 +81,7 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
     fetchItems();
   };
 
-  // ===================== DOCUMENT & ITEM MANAGEMENT =====================
+  // ===================== ITEM & DOCUMENT MANAGEMENT =====================
   const handleAddPress = () => setAddModalVisible(true);
 
   const addNewItem = async () => {
@@ -61,9 +89,15 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
       Alert.alert('Error', 'Please enter a name');
       return;
     }
+
     const { data, error } = await supabase
       .from('items')
-      .insert({ build_id: buildId, name: newItemName.trim(), type: newItemType, metadata: { addedAt: new Date().toISOString() } })
+      .insert({
+        build_id: buildId,
+        name: newItemName.trim(),
+        type: newItemType,
+        metadata: { addedAt: new Date().toISOString() },
+      })
       .select()
       .single();
 
@@ -78,7 +112,10 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
   };
 
   const uploadAndCreateDocumentItem = async (
-    uri: string, originalName: string, mimeType: string, parentId?: string | null
+    uri: string,
+    originalName: string,
+    mimeType: string,
+    parentId?: string | null
   ) => {
     setIsUploading(true);
     try {
@@ -101,12 +138,12 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
           originalName,
           mimeType,
           uploadedAt: new Date().toISOString(),
-        }
+        },
       });
 
       if (insertError) throw insertError;
 
-      Alert.alert('✅ Document Added', `${originalName} is now attached to the item`);
+      Alert.alert('✅ Document Added', `${originalName} is now attached`);
       refreshItems();
     } catch (e: any) {
       Alert.alert('Upload Failed', e.message || 'Could not save document');
@@ -127,6 +164,7 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
         const result = source === 'camera'
           ? await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 })
           : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.All, quality: 0.8 });
+
         if (result.canceled || !result.assets?.length) return;
         const asset = result.assets[0];
         uri = asset.uri;
@@ -135,7 +173,8 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
       } else {
         const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
         if (result.canceled) return;
-        if ('assets' in result && result.assets && result.assets.length > 0) {
+
+        if ('assets' in result && result.assets?.length > 0) {
           const asset = result.assets[0];
           uri = asset.uri;
           name = asset.name || `Document_${Date.now()}`;
@@ -165,7 +204,7 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
           if (error) {
             Alert.alert('Delete Failed', error.message);
           } else {
-            setItems(prev => prev.filter(i => i.id !== item.id));
+            setItems((prev) => prev.filter((i) => i.id !== item.id));
             if (selectedItem?.id === item.id) setSelectedItem(null);
             Alert.alert('✅ Item Deleted');
           }
@@ -204,12 +243,14 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
 
   const getInstructions = () => {
     if (mode === 'interior') {
-      return 'Click to lock mouse • WASD to move • Shift = Sprint • Click mini-map to teleport';
+      return 'WASD = Move • Mouse = Look • Shift = Sprint • Click minimap to teleport';
     }
     return Platform.OS === 'web'
       ? 'Drag to rotate • Scroll to zoom • Right-click + drag to pan'
       : 'Drag to rotate • Pinch to zoom';
   };
+
+  const currentModelUrl = mode === 'interior' && interiorModelUrl ? interiorModelUrl : modelUrl;
 
   return (
     <View style={styles.container}>
@@ -221,39 +262,48 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
       </View>
 
       <View style={styles.mainContent}>
+        {/* 3D Canvas with Error Boundary */}
         <View style={styles.canvasContainer}>
-<Canvas camera={{ position: [0, 8, 18], fov: 45 }} style={{ flex: 1, backgroundColor: '#0a0a1f' }} shadows>
-  <Suspense fallback={null}>
-    {mode === 'exterior' ? (
-      <ExteriorViewer modelUrl={modelUrl} selectedItem={selectedItem} />
-    ) : (
-      // TEMPORARY MINIMAL INTERIOR - No separate file
-      <>
-        <ambientLight intensity={0.8} />
-        <directionalLight position={[10, 20, 10]} intensity={1} />
-        <mesh position={[0, 1.7, 0]}>
-          <boxGeometry args={[4, 4, 4]} />
-          <meshStandardMaterial color="#00D4FF" />
-        </mesh>
-      </>
-    )}
-  </Suspense>
-</Canvas>
+          <ErrorBoundary
+            fallback={
+              <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0a0a1f', padding: 20 }}>
+                <Text style={{ color: '#ff6b6b', fontSize: 16, textAlign: 'center', marginBottom: 12 }}>
+                  Failed to load 3D model
+                </Text>
+                <Text style={{ color: '#A8A39A', fontSize: 14, textAlign: 'center' }}>
+                  This is usually caused by CORS restrictions when loading models from Meshy on localhost.{'\n\n'}
+                  Try refreshing the page or check the browser console for more details.
+                </Text>
+              </View>
+            }
+          >
+            <Canvas camera={{ position: [0, 8, 18], fov: 45 }} style={{ flex: 1, backgroundColor: '#0a0a1f' }} shadows>
+              <Suspense fallback={null}>
+                {mode === 'exterior' ? (
+                  <ExteriorViewer modelUrl={currentModelUrl} selectedItem={selectedItem} />
+                ) : (
+                  <InteriorViewer modelUrl={currentModelUrl} selectedItem={selectedItem} />
+                )}
+              </Suspense>
+            </Canvas>
+          </ErrorBoundary>
         </View>
 
+        {/* Side Panel */}
         <View style={styles.sidePanel}>
           <Text style={styles.panelTitle}>Asset Items ({items.length})</Text>
           <Text style={styles.buildIdText}>Build: {buildId.substring(0, 8)}...</Text>
 
+          {/* Mode Toggle */}
           <View style={styles.modeToggle}>
-            <TouchableOpacity 
-              style={[styles.modeBtn, mode === 'exterior' && styles.modeBtnActive]} 
+            <TouchableOpacity
+              style={[styles.modeBtn, mode === 'exterior' && styles.modeBtnActive]}
               onPress={() => setMode('exterior')}
             >
               <Text style={[styles.modeText, mode === 'exterior' && styles.modeTextActive]}>🌍 Exterior</Text>
             </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.modeBtn, mode === 'interior' && styles.modeBtnActive]} 
+            <TouchableOpacity
+              style={[styles.modeBtn, mode === 'interior' && styles.modeBtnActive]}
               onPress={() => setMode('interior')}
             >
               <Text style={[styles.modeText, mode === 'interior' && styles.modeTextActive]}>🚶 Interior</Text>
@@ -262,15 +312,19 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
 
           <ScrollView style={styles.itemList}>
             {items.length === 0 ? (
-              <Text style={styles.emptyText}>No items yet. Add items or documents to start exploring.</Text>
+              <Text style={styles.emptyText}>No items yet. Add items or use the AI Agent.</Text>
             ) : (
-              items.map(item => (
+              items.map((item) => (
                 <View key={item.id} style={styles.itemRowContainer}>
-                  <TouchableOpacity 
-                    style={[styles.itemRow, selectedItem?.id === item.id && styles.itemRowSelected]} 
+                  <TouchableOpacity
+                    style={[styles.itemRow, selectedItem?.id === item.id && styles.itemRowSelected]}
                     onPress={() => handleItemPress(item)}
                   >
-                    {item.type === 'Document' ? <Text style={styles.documentIcon}>📄</Text> : <View style={styles.itemDot} />}
+                    {item.type === 'Document' ? (
+                      <Text style={styles.documentIcon}>📄</Text>
+                    ) : (
+                      <View style={styles.itemDot} />
+                    )}
                     <View style={styles.itemTextContainer}>
                       <Text style={styles.itemName}>{item.name}</Text>
                       <Text style={styles.itemType}>{item.type}</Text>
@@ -295,8 +349,9 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
             )}
           </ScrollView>
 
-          <TouchableOpacity 
-            style={[styles.addItemButton, { backgroundColor: '#00D4FF', marginBottom: 8 }]} 
+          {/* Action Buttons */}
+          <TouchableOpacity
+            style={[styles.addItemButton, { backgroundColor: '#00D4FF', marginBottom: 8 }]}
             onPress={() => setAiModalVisible(true)}
           >
             <Text style={styles.addItemText}>🧠 Grok AI Agent</Text>
@@ -306,9 +361,9 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
             <TouchableOpacity style={[styles.addItemButton, { flex: 1 }]} onPress={handleAddPress}>
               <Text style={styles.addItemText}>+ Add New Item</Text>
             </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.addItemButton, { flex: 1, backgroundColor: '#00D4FF' }]} 
-              onPress={() => setDocModalVisible(true)} 
+            <TouchableOpacity
+              style={[styles.addItemButton, { flex: 1, backgroundColor: '#00D4FF' }]}
+              onPress={() => setDocModalVisible(true)}
               disabled={isUploading}
             >
               <Text style={styles.addItemText}>{isUploading ? 'Uploading...' : '+ Add Document'}</Text>
@@ -317,20 +372,30 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
         </View>
       </View>
 
+      {/* Instructions */}
       <View style={styles.instructions}>
         <Text style={styles.instructionText}>{getInstructions()}</Text>
       </View>
 
-      {/* Modals */}
+      {/* Add Item Modal */}
       <Modal visible={addModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Add New Item</Text>
-            <TextInput style={styles.input} placeholder="Item name (e.g. Kitchen Island)" value={newItemName} onChangeText={setNewItemName} />
+            <TextInput
+              style={styles.input}
+              placeholder="Item name (e.g. Kitchen Island)"
+              value={newItemName}
+              onChangeText={setNewItemName}
+            />
             <Text style={styles.label}>Type</Text>
             <ScrollView horizontal style={styles.typeRow} showsHorizontalScrollIndicator={false}>
-              {itemTypes.map(type => (
-                <TouchableOpacity key={type} style={[styles.typeChip, newItemType === type && styles.typeChipActive]} onPress={() => setNewItemType(type)}>
+              {itemTypes.map((type) => (
+                <TouchableOpacity
+                  key={type}
+                  style={[styles.typeChip, newItemType === type && styles.typeChipActive]}
+                  onPress={() => setNewItemType(type)}
+                >
                   <Text style={[styles.typeText, newItemType === type && styles.typeTextActive]}>{type}</Text>
                 </TouchableOpacity>
               ))}
@@ -347,6 +412,7 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
         </View>
       </Modal>
 
+      {/* Document Upload Modal */}
       <Modal visible={docModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -355,13 +421,13 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
             {!isUploading && (
               <>
                 <TouchableOpacity style={styles.docOption} onPress={() => pickAndUploadDocument('camera')}>
-                  <Text style={styles.docOptionText}>📸 Take Photo with Camera</Text>
+                  <Text style={styles.docOptionText}>📸 Take Photo</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.docOption} onPress={() => pickAndUploadDocument('library')}>
-                  <Text style={styles.docOptionText}>🖼️ Choose from Photo Library</Text>
+                  <Text style={styles.docOptionText}>🖼️ Choose from Library</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.docOption} onPress={() => pickAndUploadDocument('files')}>
-                  <Text style={styles.docOptionText}>📁 Browse Files (PDF, DOC, TXT, etc.)</Text>
+                  <Text style={styles.docOptionText}>📁 Browse Files (PDF, etc.)</Text>
                 </TouchableOpacity>
               </>
             )}
@@ -372,14 +438,12 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
         </View>
       </Modal>
 
+      {/* AI Assistant Modal */}
       <Modal visible={aiModalVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setAiModalVisible(false)}>
-        <AssetAIAssistant 
-          buildId={buildId} 
-          onClose={() => setAiModalVisible(false)} 
-          onItemsRefreshed={refreshItems} 
-        />
+        <AssetAIAssistant buildId={buildId} onClose={() => setAiModalVisible(false)} onItemsRefreshed={refreshItems} />
       </Modal>
 
+      {/* Item Detail Modal */}
       <ItemDetailModal
         visible={detailModalVisible}
         item={selectedItemForDetail}
@@ -431,7 +495,6 @@ const styles = StyleSheet.create({
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', padding: 20 },
   modalContent: { backgroundColor: '#1F1F1F', borderRadius: 20, padding: 24 },
   modalTitle: { fontSize: 22, color: '#E8B923', textAlign: 'center', marginBottom: 8 },
-  modalSubtitle: { color: '#A8A39A', textAlign: 'center', fontSize: 14, marginBottom: 20 },
   input: { backgroundColor: '#2C2C2C', color: '#F5F0E6', padding: 14, borderRadius: 12, fontSize: 16, marginBottom: 16 },
   label: { color: '#A8A39A', marginBottom: 8 },
   typeRow: { flexDirection: 'row', gap: 8, marginBottom: 20 },

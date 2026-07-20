@@ -1,6 +1,6 @@
-// ExteriorViewer.tsx - CLEAN (No Html)
-import React, { useRef, useEffect } from 'react';
-import { useThree, useFrame } from '@react-three/fiber/native';
+// ExteriorViewer.tsx
+import React, { useEffect } from 'react';
+import { useThree } from '@react-three/fiber/native';
 import { OrbitControls, Stage, useGLTF } from '@react-three/drei/native';
 import * as THREE from 'three';
 
@@ -10,12 +10,10 @@ interface Props {
 }
 
 export default function ExteriorViewer({ modelUrl, selectedItem }: Props) {
-  const controlsRef = useRef<any>(null);
   const { camera, gl } = useThree();
+  const { scene, error } = useGLTF(modelUrl);
 
-  const { scene } = useGLTF(modelUrl);
-
-  React.useEffect(() => {
+  useEffect(() => {
     if (scene) {
       scene.traverse((child: any) => {
         if (child.isMesh) {
@@ -26,36 +24,44 @@ export default function ExteriorViewer({ modelUrl, selectedItem }: Props) {
     }
   }, [scene]);
 
+  // Basic wheel zoom fix
   useEffect(() => {
     const canvas = gl.domElement;
     if (!canvas) return;
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const factor = e.deltaY > 0 ? 1.15 : 0.85;
+      const factor = e.deltaY > 0 ? 1.1 : 0.9;
       camera.position.multiplyScalar(factor);
-      controlsRef.current?.update();
     };
 
     canvas.addEventListener('wheel', handleWheel, { passive: false });
     return () => canvas.removeEventListener('wheel', handleWheel);
   }, [gl, camera]);
 
+  if (error) {
+    return (
+      <mesh>
+        <boxGeometry args={[2, 2, 2]} />
+        <meshStandardMaterial color="red" />
+      </mesh>
+    );
+  }
+
   return (
     <>
-      <Stage environment="city" intensity={1} shadows="soft">
-        <primitive object={scene} scale={1.3} />
+      <Stage environment="city" intensity={1.2} shadows="soft">
+        <primitive object={scene} scale={1.2} />
       </Stage>
-      <ambientLight intensity={0.4} />
-      <directionalLight position={[15, 25, 10]} intensity={1.3} castShadow />
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[20, 30, 15]} intensity={1.4} castShadow />
 
       <OrbitControls
-        ref={controlsRef}
         enablePan
         enableZoom
         enableRotate
-        minDistance={1}
-        maxDistance={150}
+        minDistance={2}
+        maxDistance={200}
         makeDefault
       />
     </>

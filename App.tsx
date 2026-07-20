@@ -12,15 +12,22 @@ interface Build {
   initial_prompt: string;
   center_lat: number | null;
   center_lng: number | null;
-  model_detail_level: number;
   asset_type?: string;
-  status?: string;
-  hosted_wallet_address?: string;
-  nft_metadata_uri?: string;
+
+  // Legacy columns (for backward compatibility)
   model_status?: string;
   model_url?: string;
-  model_provider?: string;
   model_task_id?: string;
+
+  // New separate exterior/interior models
+  exterior_model_url?: string;
+  exterior_model_status?: string;
+  exterior_model_task_id?: string;
+
+  interior_model_url?: string;
+  interior_model_status?: string;
+  interior_model_task_id?: string;
+
   created_at?: string;
 }
 
@@ -32,11 +39,18 @@ interface Media {
 }
 
 const ASSET_COLORS: Record<string, string> = {
-  house: '#E8B923', car: '#00D4FF', factory: '#2EC4B6', warehouse: '#9B5DE5', default: '#FFFFFF',
+  house: '#E8B923',
+  car: '#00D4FF',
+  factory: '#2EC4B6',
+  warehouse: '#9B5DE5',
+  default: '#FFFFFF',
 };
 
 const ASSET_LABELS: Record<string, string> = {
-  house: 'House', car: 'Car', factory: 'Factory', warehouse: 'Warehouse',
+  house: 'House',
+  car: 'Car',
+  factory: 'Factory',
+  warehouse: 'Warehouse',
 };
 
 export default function App() {
@@ -47,10 +61,11 @@ export default function App() {
   const [mediaForSelected, setMediaForSelected] = useState<Media[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [viewerVisible, setViewerVisible] = useState(false);
+  const [regenModalVisible, setRegenModalVisible] = useState(false);
 
   const [prompt, setPrompt] = useState('');
   const [selectedAssetType, setSelectedAssetType] = useState<'house' | 'car' | 'factory' | 'warehouse'>('house');
-  const [selectedMedias, setSelectedMedias] = useState<{ uri: string; type: 'photo' | 'video' }[]>([]); // now multiple
+  const [selectedMedias, setSelectedMedias] = useState<{ uri: string; type: 'photo' | 'video' }[]>([]);
   const [createHostedWallet, setCreateHostedWallet] = useState(true);
 
   const [useCurrentLocation, setUseCurrentLocation] = useState(true);
@@ -62,10 +77,14 @@ export default function App() {
   const [autoRotate, setAutoRotate] = useState(true);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
 
+  // ==================== DATA FETCHING ====================
   const loadBuilds = async () => {
     setIsLoadingBuilds(true);
-    const { data } = await supabase.from('builds').select('*')
-      .not('center_lat', 'is', null).not('center_lng', 'is', null)
+    const { data } = await supabase
+      .from('builds')
+      .select('*')
+      .not('center_lat', 'is', null)
+      .not('center_lng', 'is', null)
       .order('created_at', { ascending: false });
     setBuilds(data || []);
     setIsLoadingBuilds(false);
@@ -76,6 +95,7 @@ export default function App() {
     setMediaForSelected(data || []);
   };
 
+  // ==================== LOCATION ====================
   const getCurrentLocation = async () => {
     setLocationLoading(true);
     try {
@@ -86,7 +106,7 @@ export default function App() {
       }
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       return { lat: loc.coords.latitude, lng: loc.coords.longitude };
-    } catch (e) {
+    } catch {
       Alert.alert('Location Error', 'Could not get current location.');
       return null;
     } finally {
@@ -97,25 +117,45 @@ export default function App() {
   const geocodeAddress = async (address: string) => {
     if (!address.trim()) return null;
     try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`);
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`
+      );
       const data = await res.json();
       if (data && data.length > 0) {
         return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
       }
       Alert.alert('Address Not Found', 'Please try a more specific address.');
       return null;
-    } catch (e) {
+    } catch {
       Alert.alert('Geocoding Failed', 'Could not find location.');
       return null;
     }
   };
+const pickMedia = async () => {
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ImagePicker.MediaTypeOptions.All,
+    quality: 0.8,
+    allowsMultipleSelection: true,
+  });
 
+  if (!result.canceled && result.assets.length > 0) {
+    const newMedias = result.assets.map((asset) => ({
+      uri: asset.uri,
+      type: (asset.type === 'video' || asset.uri.includes('.mp4') || asset.uri.includes('.mov')) 
+        ? 'video' 
+        : 'photo' as const,
+    }));
+    setSelectedMedias((prev) => [...prev, ...newMedias]);
+  }
+};
+  // ==================== STATUS CHECKING ====================
   const checkModelStatus = async (buildId: string) => {
     setIsCheckingStatus(true);
     try {
       const { data, error } = await supabase.functions.invoke('check-meshy-status', {
         body: { build_id: buildId },
       });
+
       if (error) {
         const { data: dbData } = await supabase.from('builds').select('*').eq('id', buildId).single();
         if (dbData && selectedBuild?.id === buildId) setSelectedBuild(dbData);
@@ -133,70 +173,54 @@ export default function App() {
     }
   };
 
+  // Auto-polling when models are generating
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
-    if (selectedBuild && (selectedBuild.model_status === 'processing' || selectedBuild.model_status === 'pending')) {
+
+    const needsPolling =
+      selectedBuild &&
+      (selectedBuild.exterior_model_status === 'processing' ||
+        selectedBuild.interior_model_status === 'processing');
+
+    if (needsPolling) {
       interval = setInterval(() => checkModelStatus(selectedBuild.id), 10000);
     }
-    return () => { if (interval) clearInterval(interval); };
-  }, [selectedBuild?.id, selectedBuild?.model_status]);
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [selectedBuild?.id, selectedBuild?.exterior_model_status, selectedBuild?.interior_model_status]);
 
   useEffect(() => {
     loadBuilds();
   }, []);
 
-  const createHostedWalletAndNFTMetadata = (buildName: string, assetType: string) => {
-    const randomHex = Array.from(crypto.getRandomValues(new Uint8Array(20)))
-      .map(b => b.toString(16).padStart(2, '0')).join('');
-    const address = '0x' + randomHex;
-    return {
-      hosted_wallet_address: address,
-      nft_metadata: {
-        name: buildName,
-        description: `Digital twin of a ${assetType}`,
-        attributes: [
-          { trait_type: "Asset Type", value: assetType },
-          { trait_type: "Hosted Wallet", value: address },
-        ],
-      },
-    };
-  };
-
-  // ===================== MULTIPLE MEDIA DURING CREATION =====================
-  const pickMedia = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
-      quality: 0.8,
-      allowsMultipleSelection: true,   // ← now allows many files
-    });
-    if (!result.canceled && result.assets.length > 0) {
-      const newMedias = result.assets.map(asset => {
-        const isVideo = asset.type === 'video' || asset.uri.includes('.mp4') || asset.uri.includes('.mov');
-        return { uri: asset.uri, type: isVideo ? 'video' : 'photo' as const };
-      });
-      setSelectedMedias(prev => [...prev, ...newMedias]);
-    }
-  };
-
+  // ==================== CREATE NEW ASSET ====================
   const generateTwin = async () => {
     if (!prompt.trim()) {
       Alert.alert('Missing Description', 'Please describe something to build.');
       return;
     }
-
     setIsUploading(true);
 
-    let finalLat: number;
-    let finalLng: number;
+    let finalLat: number, finalLng: number;
 
     if (useCurrentLocation) {
       const loc = await getCurrentLocation();
-      if (!loc) { setIsUploading(false); return; }
-      finalLat = loc.lat; finalLng = loc.lng;
+      if (!loc) {
+        setIsUploading(false);
+        return;
+      }
+      finalLat = loc.lat;
+      finalLng = loc.lng;
     } else {
       const loc = await geocodeAddress(manualAddress);
-      if (!loc) { setIsUploading(false); return; }
-      finalLat = loc.lat; finalLng = loc.lng;
+      if (!loc) {
+        setIsUploading(false);
+        return;
+      }
+      finalLat = loc.lat;
+      finalLng = loc.lng;
     }
 
     const { data: build, error: buildError } = await supabase
@@ -209,10 +233,6 @@ export default function App() {
         model_detail_level: 3,
         asset_type: selectedAssetType,
         status: 'active',
-        hosted_wallet_address: createHostedWallet ? createHostedWalletAndNFTMetadata(prompt, selectedAssetType).hosted_wallet_address : null,
-        nft_metadata_uri: createHostedWallet ? JSON.stringify(createHostedWalletAndNFTMetadata(prompt, selectedAssetType).nft_metadata) : null,
-        model_status: 'pending',
-        model_provider: 'meshy',
       })
       .select()
       .single();
@@ -223,41 +243,50 @@ export default function App() {
       return;
     }
 
-    // Upload ALL selected media
+    // Upload selected media
     for (const media of selectedMedias) {
       try {
         const fileExt = media.type === 'video' ? 'mp4' : 'jpg';
         const fileName = `${build.id}_${Date.now()}_${Math.random().toString(36).slice(2)}.${fileExt}`;
         const contentType = media.type === 'video' ? 'video/mp4' : 'image/jpeg';
         const blob = await (await fetch(media.uri)).blob();
+
         const { error: uploadError } = await supabase.storage.from('media').upload(fileName, blob, { contentType });
         if (!uploadError) {
           const { data: urlData } = supabase.storage.from('media').getPublicUrl(fileName);
-          await supabase.from('media').insert({ build_id: build.id, url: urlData.publicUrl, type: media.type });
+          await supabase.from('media').insert({
+            build_id: build.id,
+            url: urlData.publicUrl,
+            type: media.type,
+          });
         }
       } catch (e) {
         console.error('Media upload failed', e);
       }
     }
 
-    // Trigger 3D generation
+    // Trigger exterior + interior generation
     try {
       await supabase.functions.invoke('generate-3d-model', {
-        body: { build_id: build.id, prompt: prompt, asset_type: selectedAssetType },
+        body: { build_id: build.id, prompt, asset_type: selectedAssetType, model_type: 'exterior' },
       });
-    } catch (e) {}
+      await supabase.functions.invoke('generate-3d-model', {
+        body: { build_id: build.id, prompt, asset_type: selectedAssetType, model_type: 'interior' },
+      });
+    } catch (e) {
+      console.log('Model generation trigger error', e);
+    }
 
     setIsUploading(false);
     setModalVisible(false);
     setPrompt('');
-    setSelectedMedias([]);           // clear for next creation
+    setSelectedMedias([]);
     setManualAddress('');
     await loadBuilds();
-
     Alert.alert('✅ Asset Created!', `Build ID: ${build.id}`);
   };
 
-  // ===================== ADD MORE MEDIA TO EXISTING ASSET =====================
+  // ==================== ADD MORE MEDIA ====================
   const addMoreMediaToBuild = async () => {
     if (!selectedBuild) return;
 
@@ -266,11 +295,9 @@ export default function App() {
       quality: 0.8,
       allowsMultipleSelection: true,
     });
-
     if (result.canceled || !result.assets.length) return;
 
     setIsUploading(true);
-
     for (const asset of result.assets) {
       try {
         const isVideo = asset.type === 'video' || asset.uri.includes('.mp4') || asset.uri.includes('.mov');
@@ -285,48 +312,39 @@ export default function App() {
           await supabase.from('media').insert({
             build_id: selectedBuild.id,
             url: urlData.publicUrl,
-            type: isVideo ? 'video' : 'photo'
+            type: isVideo ? 'video' : 'photo',
           });
         }
       } catch (e) {
         console.error('Media upload failed', e);
       }
     }
-
     setIsUploading(false);
     await loadMediaForBuild(selectedBuild.id);
-    Alert.alert('✅ Media added', 'New files have been attached to this asset');
+    Alert.alert('✅ Media added', 'New files attached');
   };
 
+  // ==================== DELETE BUILD ====================
   const deleteBuild = async (build: Build) => {
-    Alert.alert(
-      'Confirm Delete',
-      `Delete "${build.name}" and all its data?\n\nThis cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await supabase.from('media').delete().eq('build_id', build.id);
-              if (build.model_url) {
-                const filename = `${build.id}.glb`;
-                await supabase.storage.from('models').remove([filename]);
-              }
-              const { error } = await supabase.from('builds').delete().eq('id', build.id);
-              if (error) throw error;
-              setSelectedBuild(null);
-              setMediaForSelected([]);
-              await loadBuilds();
-              Alert.alert('✅ Asset Deleted Successfully');
-            } catch (e: any) {
-              Alert.alert('Delete Failed', e.message || 'Unknown error');
-            }
+    Alert.alert('Confirm Delete', `Delete "${build.name}" and all data?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await supabase.from('media').delete().eq('build_id', build.id);
+            await supabase.from('builds').delete().eq('id', build.id);
+            setSelectedBuild(null);
+            setMediaForSelected([]);
+            await loadBuilds();
+            Alert.alert('✅ Deleted');
+          } catch (e: any) {
+            Alert.alert('Delete Failed', e.message);
           }
-        }
-      ]
-    );
+        },
+      },
+    ]);
   };
 
   const handlePointClick = async (point: any) => {
@@ -334,7 +352,10 @@ export default function App() {
     setAutoRotate(false);
     await loadMediaForBuild(point.id);
     if (globeRef.current) {
-      globeRef.current.pointOfView({ lat: point.lat || point.center_lat, lng: point.lng || point.center_lng, altitude: 0.55 }, 700);
+      globeRef.current.pointOfView(
+        { lat: point.center_lat, lng: point.center_lng, altitude: 0.55 },
+        700
+      );
     }
   };
 
@@ -345,73 +366,92 @@ export default function App() {
   };
 
   const zoomToGlobe = () => {
-    if (globeRef.current) globeRef.current.pointOfView({ altitude: 1.7 }, 600);
+    if (globeRef.current) {
+      globeRef.current.pointOfView({ altitude: 1.7 }, 600);
+    }
   };
 
+  // ==================== 3D VIEWER ====================
   const open3DViewer = () => {
-    if (selectedBuild?.model_url) {
+    if (!selectedBuild) return;
+
+    const hasModel =
+      selectedBuild.exterior_model_url ||
+      selectedBuild.interior_model_url ||
+      selectedBuild.model_url;
+
+    if (hasModel) {
       setViewerVisible(true);
     } else {
       Alert.alert('Not Ready', '3D model is not available yet.');
     }
   };
 
-  const downloadModel = () => {
-    if (selectedBuild?.model_url) {
-      if (Platform.OS === 'web') {
-        const link = document.createElement('a');
-        link.href = selectedBuild.model_url;
-        link.download = `${selectedBuild.name || 'model'}.glb`;
-        link.click();
-      } else {
-        Alert.alert('Download', 'Download feature coming soon for mobile');
-      }
-    }
+  // ==================== REGENERATION ====================
+  const reGenerateModel = () => {
+    if (!selectedBuild) return;
+    setRegenModalVisible(true);
   };
 
-  const reGenerateModel = async () => {
+  const triggerRegeneration = async (type: 'exterior' | 'interior' | 'both') => {
     if (!selectedBuild) return;
-
-    const confirmed = await new Promise<boolean>(resolve => {
-      Alert.alert(
-        'Re-generate 3D Model',
-        'This will create a new version using all current photos and videos.\n\nExisting items and metadata will NOT be deleted.',
-        [
-          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-          { text: 'Re-generate', onPress: () => resolve(true) }
-        ]
-      );
-    });
-
-    if (!confirmed) return;
+    setRegenModalVisible(false);
 
     try {
-      await supabase.functions.invoke('generate-3d-model', {
-        body: {
-          build_id: selectedBuild.id,
-          prompt: selectedBuild.initial_prompt,
-          asset_type: selectedBuild.asset_type,
-          re_generate: true
-        },
-      });
+      const promises: Promise<any>[] = [];
 
-      Alert.alert('✅ Re-generation started', 'New model will appear when ready');
-      await checkModelStatus(selectedBuild.id);
-    } catch (e: any) {
-      Alert.alert('Error', e.message || 'Failed to start re-generation');
+      if (type === 'exterior' || type === 'both') {
+        promises.push(
+          supabase.functions.invoke('generate-3d-model', {
+            body: {
+              build_id: selectedBuild.id,
+              prompt: selectedBuild.initial_prompt,
+              asset_type: selectedBuild.asset_type,
+              model_type: 'exterior',
+            },
+          })
+        );
+      }
+
+      if (type === 'interior' || type === 'both') {
+        promises.push(
+          supabase.functions.invoke('generate-3d-model', {
+            body: {
+              build_id: selectedBuild.id,
+              prompt: selectedBuild.initial_prompt,
+              asset_type: selectedBuild.asset_type,
+              model_type: 'interior',
+            },
+          })
+        );
+      }
+
+      await Promise.all(promises);
+
+      Alert.alert('✅ Generation Started', `Request sent for ${type}.`);
+
+      setTimeout(() => {
+        if (selectedBuild) checkModelStatus(selectedBuild.id);
+      }, 2000);
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to start generation');
     }
   };
 
-  const globePoints = builds.filter(b => b.center_lat && b.center_lng).map((b, i) => ({
-    ...b,
-    lat: b.center_lat!,
-    lng: b.center_lng!,
-    color: ASSET_COLORS[b.asset_type || 'default'],
-    size: 0.08,
-    altitude: 0.012 + (i % 3) * 0.004,
-    label: `${b.name} • ${ASSET_LABELS[b.asset_type || 'default']}`,
-  }));
+  // ==================== GLOBE DATA ====================
+  const globePoints = builds
+    .filter((b) => b.center_lat && b.center_lng)
+    .map((b, i) => ({
+      ...b,
+      lat: b.center_lat!,
+      lng: b.center_lng!,
+      color: ASSET_COLORS[b.asset_type || 'default'],
+      size: 0.08,
+      altitude: 0.012 + (i % 3) * 0.004,
+      label: `${b.name} • ${ASSET_LABELS[b.asset_type || 'default']}`,
+    }));
 
+  // ==================== RENDER ====================
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -435,10 +475,15 @@ export default function App() {
             width={Math.min(920, Dimensions.get('window').width * 0.92)}
             height={Math.min(680, Dimensions.get('window').height * 0.68)}
             pointsData={globePoints}
-            pointLat="lat" pointLng="lng" pointColor="color"
-            pointAltitude="altitude" pointRadius="size" pointLabel="label"
+            pointLat="lat"
+            pointLng="lng"
+            pointColor="color"
+            pointAltitude="altitude"
+            pointRadius="size"
+            pointLabel="label"
             onPointClick={handlePointClick}
-            autoRotate={autoRotate} autoRotateSpeed={0.18}
+            autoRotate={autoRotate}
+            autoRotateSpeed={0.18}
             pointOfView={{ lat: -33.87, lng: 151.21, altitude: 1.6 }}
           />
         )}
@@ -449,8 +494,12 @@ export default function App() {
           <TouchableOpacity style={styles.controlBtn} onPress={() => setAutoRotate(!autoRotate)}>
             <Text style={styles.controlText}>{autoRotate ? 'Pause' : 'Resume'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.controlBtn} onPress={loadBuilds}><Text style={styles.controlText}>Refresh</Text></TouchableOpacity>
-          <TouchableOpacity style={styles.controlBtn} onPress={zoomToGlobe}><Text style={styles.controlText}>Reset View</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.controlBtn} onPress={loadBuilds}>
+            <Text style={styles.controlText}>Refresh</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.controlBtn} onPress={zoomToGlobe}>
+            <Text style={styles.controlText}>Reset View</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -458,6 +507,7 @@ export default function App() {
         <Text style={styles.fabText}>+ New Asset</Text>
       </TouchableOpacity>
 
+      {/* Selected Build Panel */}
       {selectedBuild && (
         <View style={styles.infoPanel}>
           <ScrollView>
@@ -467,57 +517,71 @@ export default function App() {
             </View>
             <Text style={styles.panelType}>{ASSET_LABELS[selectedBuild.asset_type || 'default']}</Text>
 
-            {selectedBuild.hosted_wallet_address && (
-              <View style={styles.walletBox}>
-                <Text style={styles.walletLabel}>Hosted Wallet</Text>
-                <Text style={styles.walletAddress}>{selectedBuild.hosted_wallet_address}</Text>
-              </View>
-            )}
+            {/* 3D Digital Twin Section */}
+            <View style={{ marginTop: 14, backgroundColor: '#1F1F1F', padding: 16, borderRadius: 14 }}>
+              <Text style={{ color: '#A8A39A', marginBottom: 12, fontWeight: '600', fontSize: 15 }}>
+                3D Digital Twin
+              </Text>
 
-            {selectedBuild.model_status && selectedBuild.model_status !== 'none' && (
-              <View style={{ marginTop: 14, backgroundColor: '#1F1F1F', padding: 14, borderRadius: 12 }}>
-                <Text style={{ color: '#A8A39A', marginBottom: 6, fontWeight: '600' }}>3D Digital Twin</Text>
-                
-                {selectedBuild.model_status === 'completed' && selectedBuild.model_url ? (
-                  <View style={{ gap: 10 }}>
-                    <TouchableOpacity 
-                      style={{ backgroundColor: '#00D4FF', paddingVertical: 14, borderRadius: 10, alignItems: 'center' }}
-                      onPress={open3DViewer}
-                    >
-                      <Text style={{ color: '#1F1F1F', fontWeight: 'bold', fontSize: 16 }}>🧊 Open 3D Viewer</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity 
-                      style={{ backgroundColor: '#E8B923', paddingVertical: 12, borderRadius: 10, alignItems: 'center' }}
-                      onPress={reGenerateModel}
-                    >
-                      <Text style={{ color: '#1F1F1F', fontWeight: 'bold' }}>🔄 Re-generate 3D with latest media</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity 
-                      style={{ backgroundColor: '#444', paddingVertical: 12, borderRadius: 10, alignItems: 'center' }}
-                      onPress={downloadModel}
-                    >
-                      <Text style={{ color: '#fff', fontWeight: '600' }}>⬇️ Download .glb File</Text>
-                    </TouchableOpacity>
-                  </View>
+              {/* Exterior */}
+              <View style={{ marginBottom: 14 }}>
+                <Text style={{ color: '#E8B923', fontWeight: '600', marginBottom: 6 }}>Exterior Model</Text>
+                {selectedBuild.exterior_model_url ? (
+                  <TouchableOpacity
+                    style={{ backgroundColor: '#00D4FF', paddingVertical: 13, borderRadius: 10, alignItems: 'center' }}
+                    onPress={open3DViewer}
+                  >
+                    <Text style={{ color: '#1F1F1F', fontWeight: 'bold', fontSize: 15 }}>🧊 View Exterior</Text>
+                  </TouchableOpacity>
                 ) : (
                   <Text style={{ color: '#E8B923' }}>
-                    {selectedBuild.model_status === 'pending' ? 'Queued for generation...' : 'Generating 3D model with Meshy AI...'}
+                    {selectedBuild.exterior_model_status === 'processing' ? 'Generating with Meshy...' : 'Not generated yet'}
                   </Text>
                 )}
-
-                <TouchableOpacity style={{ marginTop: 10 }} onPress={() => checkModelStatus(selectedBuild.id)} disabled={isCheckingStatus}>
-                  <Text style={{ color: '#00D4FF' }}>{isCheckingStatus ? 'Checking...' : '⟳ Refresh 3D Status'}</Text>
-                </TouchableOpacity>
               </View>
-            )}
 
-            {/* Media section - now shows all attached files */}
+              {/* Interior */}
+              <View style={{ marginBottom: 16 }}>
+                <Text style={{ color: '#E8B923', fontWeight: '600', marginBottom: 6 }}>Interior Model</Text>
+                {selectedBuild.interior_model_url ? (
+                  <TouchableOpacity
+                    style={{ backgroundColor: '#00D4FF', paddingVertical: 13, borderRadius: 10, alignItems: 'center' }}
+                    onPress={open3DViewer}
+                  >
+                    <Text style={{ color: '#1F1F1F', fontWeight: 'bold', fontSize: 15 }}>🧊 View Interior</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <Text style={{ color: '#E8B923' }}>
+                    {selectedBuild.interior_model_status === 'processing' ? 'Generating with Meshy...' : 'Not generated yet'}
+                  </Text>
+                )}
+              </View>
+
+              <TouchableOpacity
+                style={{ backgroundColor: '#2EC4B6', paddingVertical: 14, borderRadius: 12, alignItems: 'center' }}
+                onPress={reGenerateModel}
+              >
+                <Text style={{ color: '#1F1F1F', fontWeight: 'bold', fontSize: 16 }}>
+                  🚀 Generate / Re-generate 3D Models
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={{ marginTop: 12, alignItems: 'center' }}
+                onPress={() => checkModelStatus(selectedBuild.id)}
+                disabled={isCheckingStatus}
+              >
+                <Text style={{ color: '#00D4FF' }}>
+                  {isCheckingStatus ? 'Checking...' : '⟳ Refresh Status'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Media Section */}
             {mediaForSelected.length > 0 && (
               <View style={{ marginTop: 16 }}>
                 <Text style={{ color: '#A8A39A', marginBottom: 6 }}>Attached Media ({mediaForSelected.length})</Text>
-                {mediaForSelected.map(m => (
+                {mediaForSelected.map((m) => (
                   <View key={m.id} style={{ marginBottom: 8 }}>
                     {m.type === 'photo' ? (
                       <Image source={{ uri: m.url }} style={{ width: '100%', height: 160, borderRadius: 8 }} />
@@ -531,80 +595,94 @@ export default function App() {
               </View>
             )}
 
-            {/* New button: Add more media after creation */}
-            <TouchableOpacity 
-              style={[styles.actionBtn, { backgroundColor: '#00D4FF', marginTop: 12 }]} 
+            <TouchableOpacity
+              style={[styles.actionBtn, { backgroundColor: '#00D4FF', marginTop: 12 }]}
               onPress={addMoreMediaToBuild}
             >
               <Text style={styles.actionBtnText}>+ Add more photos / videos</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#FF3B30', marginTop: 20 }]} onPress={() => deleteBuild(selectedBuild)}>
+            <TouchableOpacity
+              style={[styles.actionBtn, { backgroundColor: '#FF3B30', marginTop: 20 }]}
+              onPress={() => deleteBuild(selectedBuild)}
+            >
               <Text style={styles.actionBtnText}>🗑️ Delete Asset</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.closeBtn} onPress={closePanel}><Text style={styles.closeText}>Close</Text></TouchableOpacity>
+
+            <TouchableOpacity style={styles.closeBtn} onPress={closePanel}>
+              <Text style={styles.closeText}>Close</Text>
+            </TouchableOpacity>
           </ScrollView>
         </View>
       )}
 
-      {/* Asset Creation Modal - now supports multiple files */}
+      {/* Create Asset Modal */}
       <Modal visible={modalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>What are we building today?</Text>
-
-            <TextInput 
-              style={styles.input} 
-              placeholder="Describe your asset..." 
-              value={prompt} 
-              onChangeText={setPrompt} 
-              multiline 
-              placeholderTextColor="#888" 
+            <TextInput
+              style={styles.input}
+              placeholder="Describe your asset..."
+              value={prompt}
+              onChangeText={setPrompt}
+              multiline
+              placeholderTextColor="#888"
             />
-
             <TouchableOpacity style={styles.photoButton} onPress={pickMedia}>
               <Text style={styles.photoButtonText}>
-                {selectedMedias.length > 0 
-                  ? `✓ ${selectedMedias.length} file(s) selected` 
+                {selectedMedias.length > 0
+                  ? `✓ ${selectedMedias.length} file(s) selected`
                   : '+ Add Photos or Videos (multiple allowed)'}
               </Text>
             </TouchableOpacity>
 
-            {/* Location, wallet, asset type sections unchanged */}
+            {/* Location Section */}
             <View style={{ marginTop: 16 }}>
               <Text style={styles.typeLabel}>Location</Text>
               <View style={{ flexDirection: 'row', backgroundColor: '#2C2C2C', borderRadius: 999, padding: 4 }}>
-                <TouchableOpacity style={[styles.locationTab, useCurrentLocation && styles.locationTabActive]} onPress={() => setUseCurrentLocation(true)}>
+                <TouchableOpacity
+                  style={[styles.locationTab, useCurrentLocation && styles.locationTabActive]}
+                  onPress={() => setUseCurrentLocation(true)}
+                >
                   <Text style={useCurrentLocation ? styles.typeTextActive : styles.typeText}>📍 Current Location</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.locationTab, !useCurrentLocation && styles.locationTabActive]} onPress={() => setUseCurrentLocation(false)}>
+                <TouchableOpacity
+                  style={[styles.locationTab, !useCurrentLocation && styles.locationTabActive]}
+                  onPress={() => setUseCurrentLocation(false)}
+                >
                   <Text style={!useCurrentLocation ? styles.typeTextActive : styles.typeText}>Enter Address</Text>
                 </TouchableOpacity>
               </View>
-
               {useCurrentLocation ? (
-                <Text style={{ color: '#00D4FF', marginTop: 8, textAlign: 'center' }}>Will use your current GPS location</Text>
+                <Text style={{ color: '#00D4FF', marginTop: 8, textAlign: 'center' }}>
+                  Will use your current GPS location
+                </Text>
               ) : (
-                <TextInput 
-                  style={[styles.input, { marginTop: 8 }]} 
-                  placeholder="Enter address (e.g. 123 Example St, Sydney)" 
-                  value={manualAddress} 
-                  onChangeText={setManualAddress} 
+                <TextInput
+                  style={[styles.input, { marginTop: 8 }]}
+                  placeholder="Enter address"
+                  value={manualAddress}
+                  onChangeText={setManualAddress}
                 />
               )}
             </View>
 
             <View style={styles.toggleRow}>
               <Text style={styles.toggleLabel}>Create hosted wallet for this asset</Text>
-              <Switch value={createHostedWallet} onValueChange={setCreateHostedWallet} trackColor={{ false: '#555', true: '#00D4FF' }} />
+              <Switch
+                value={createHostedWallet}
+                onValueChange={setCreateHostedWallet}
+                trackColor={{ false: '#555', true: '#00D4FF' }}
+              />
             </View>
 
             <Text style={styles.typeLabel}>Asset Type</Text>
             <View style={styles.typeRow}>
-              {(['house', 'car', 'factory', 'warehouse'] as const).map(type => (
-                <TouchableOpacity 
-                  key={type} 
-                  style={[styles.typeChip, selectedAssetType === type && styles.typeChipActive]} 
+              {(['house', 'car', 'factory', 'warehouse'] as const).map((type) => (
+                <TouchableOpacity
+                  key={type}
+                  style={[styles.typeChip, selectedAssetType === type && styles.typeChipActive]}
                   onPress={() => setSelectedAssetType(type)}
                 >
                   <Text style={[styles.typeText, selectedAssetType === type && styles.typeTextActive]}>{type}</Text>
@@ -612,10 +690,15 @@ export default function App() {
               ))}
             </View>
 
-            <TouchableOpacity style={styles.generateButton} onPress={generateTwin} disabled={isUploading || locationLoading}>
-              <Text style={styles.generateButtonText}>{isUploading || locationLoading ? 'Creating...' : 'Generate 3D Twin'}</Text>
+            <TouchableOpacity
+              style={styles.generateButton}
+              onPress={generateTwin}
+              disabled={isUploading || locationLoading}
+            >
+              <Text style={styles.generateButtonText}>
+                {isUploading || locationLoading ? 'Creating...' : 'Generate 3D Twin'}
+              </Text>
             </TouchableOpacity>
-
             <TouchableOpacity onPress={() => setModalVisible(false)}>
               <Text style={styles.cancelText}>Cancel</Text>
             </TouchableOpacity>
@@ -623,18 +706,39 @@ export default function App() {
         </View>
       </Modal>
 
+      {/* Regeneration Modal */}
+      <Modal visible={regenModalVisible} transparent animationType="fade" onRequestClose={() => setRegenModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Re-generate 3D Model</Text>
+            <TouchableOpacity style={[styles.generateButton, { marginBottom: 10 }]} onPress={() => triggerRegeneration('exterior')}>
+              <Text style={styles.generateButtonText}>Exterior Only</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.generateButton, { marginBottom: 10 }]} onPress={() => triggerRegeneration('interior')}>
+              <Text style={styles.generateButtonText}>Interior Only</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.generateButton, { marginBottom: 10 }]} onPress={() => triggerRegeneration('both')}>
+              <Text style={styles.generateButtonText}>Both (Exterior + Interior)</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setRegenModalVisible(false)}>
+              <Text style={styles.cancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* 3D Viewer Modal */}
-      <Modal
-        visible={viewerVisible}
-        animationType="slide"
-        presentationStyle="fullScreen"
-        onRequestClose={() => setViewerVisible(false)}
-      >
-        {selectedBuild?.model_url && selectedBuild?.id && (
-          <ModelViewer 
-            modelUrl={selectedBuild.model_url} 
-            buildId={selectedBuild.id} 
-            onClose={() => setViewerVisible(false)} 
+      <Modal visible={viewerVisible} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => setViewerVisible(false)}>
+        {selectedBuild && (
+          <ModelViewer
+            modelUrl={
+              selectedBuild.exterior_model_url ||
+              selectedBuild.interior_model_url ||
+              selectedBuild.model_url ||
+              ''
+            }
+            buildId={selectedBuild.id}
+            onClose={() => setViewerVisible(false)}
           />
         )}
       </Modal>
@@ -660,9 +764,6 @@ const styles = StyleSheet.create({
   colorDot: { width: 14, height: 14, borderRadius: 7, marginRight: 10 },
   panelTitle: { fontSize: 20, color: '#E8B923', fontWeight: 'bold' },
   panelType: { color: '#00D4FF', marginBottom: 8 },
-  walletBox: { backgroundColor: '#1F1F1F', padding: 12, borderRadius: 10, marginTop: 8 },
-  walletLabel: { color: '#00D4FF', fontSize: 13, fontWeight: '600' },
-  walletAddress: { color: '#E8B923', fontSize: 13, marginTop: 4, fontFamily: 'monospace' },
   actionBtn: { backgroundColor: '#FFD700', padding: 14, borderRadius: 999, alignItems: 'center', marginTop: 10 },
   actionBtnText: { color: '#1F1F1F', fontWeight: 'bold' },
   closeBtn: { alignItems: 'center', marginTop: 12 },
