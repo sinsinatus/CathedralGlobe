@@ -50,7 +50,7 @@ export default function App() {
 
   const [prompt, setPrompt] = useState('');
   const [selectedAssetType, setSelectedAssetType] = useState<'house' | 'car' | 'factory' | 'warehouse'>('house');
-  const [selectedMedias, setSelectedMedias] = useState<{ uri: string; type: 'photo' | 'video' }[]>([]); // now multiple
+  const [selectedMedias, setSelectedMedias] = useState<{ uri: string; type: 'photo' | 'video' }[]>([]); // now  multiple
   const [createHostedWallet, setCreateHostedWallet] = useState(true);
 
   const [useCurrentLocation, setUseCurrentLocation] = useState(true);
