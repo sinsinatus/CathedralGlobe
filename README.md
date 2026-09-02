@@ -2,7 +2,7 @@ CathedralGlobe – Project Status Summary
 Date: 3 June 2026Overall GoalsBuild a scalable, user-friendly platform for creating and managing AI-powered 3D digital twins of physical assets.
 Deliver an interactive “Orbital Empire” globe with live asset pins and statistics.
 Support asset-centric ownership via service-managed hosted wallets (future NFT support).
-Enable media uploads and future AI-driven item recognition with spatial metadata.
+Enable media uploads and AI-driven item recognition with spatial metadata.
 Provide a rich, immersive in-app 3D viewer with interactive item sidebar.
 
 Key Decisions & Architecture ChoicesFrontend: React Native + Expo (web-first; native development deprioritized due to crashes).
