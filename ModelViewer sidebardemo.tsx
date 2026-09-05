@@ -125,6 +125,7 @@ export default function ModelViewer({ modelUrl, onClose }: Props) {
   );
 }
 
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a0a1f' },
   header: {
