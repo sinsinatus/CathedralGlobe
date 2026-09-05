@@ -25,7 +25,7 @@ interface Props {
   items: Item[];                    
   onClose: () => void;
   onSaved: () => void;              
-  onAttachDocument?: (parentItemId: string) => void;   // ← NEW: for attaching docs to this item
+  onAttachDocument?: (parentItemId: string) => void;   // ← NEW: for attaching docs to  this item
 }
 
 export default function ItemDetailModal({ 
