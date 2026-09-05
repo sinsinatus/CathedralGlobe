@@ -1,4 +1,4 @@
-// InteriorViewer.tsx - MINIMAL STABLE VERSION (v3)
+// InteriorViewer.tsx - MINIMAL STABLE  VERSION (v3)
 import React, { useRef, useEffect, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber/native';
 import * as THREE from 'three';
