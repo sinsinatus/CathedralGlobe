@@ -1,4 +1,4 @@
-// ExteriorViewer.tsx - CLEAN (No Html)
+// ExteriorViewer.tsx - CLEAN (No  Html)
 import React, { useRef, useEffect } from 'react';
 import { useThree, useFrame } from '@react-three/fiber/native';
 import { OrbitControls, Stage, useGLTF } from '@react-three/drei/native';
