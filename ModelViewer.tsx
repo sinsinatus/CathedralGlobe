@@ -53,7 +53,7 @@ export default function ModelViewer({ modelUrl, buildId, onClose }: Props) {
     fetchItems();
   };
 
-  // ===================== DOCUMENT & ITEM MANAGEMENT =====================
+  // ===================== DOCUMENT & ITEM MANAGEMENT  =====================
   const handleAddPress = () => setAddModalVisible(true);
 
   const addNewItem = async () => {
